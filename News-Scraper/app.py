@@ -1,11 +1,14 @@
 import streamlit as st
 import os
+from pathlib import Path
 from news_extractor import fetch_local_news
 from disruption_analyzer import check_for_disruption
 from dotenv import load_dotenv
 
-# Load environment variables (Local development)
-load_dotenv()
+# Robustly load environment variables from the root .env file
+# Based on the structure: dev trials/.env and dev trials/News-Scraper/app.py
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # --- Page Config ---
 st.set_page_config(
