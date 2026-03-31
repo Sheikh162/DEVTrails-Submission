@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ app_name }} | Disruption Monitor</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <main class="page-shell">
+        <aside class="sidebar glass-card">
+            <img
+                src="https://img.icons8.com/wired/100/ffffff/search-property.png"
+                alt="Search icon"
+                class="sidebar-icon"
+            >
+            <h2>Intelligence Hub</h2>
+            <div class="sidebar-divider"></div>
+            <div class="info-chip {{ 'ready' if api_ready else 'offline' }}">
+                {{ 'API System Ready' if api_ready else 'System Offline (Key Missing)' }}
+            </div>
+            <div class="sidebar-divider"></div>
+            <p class="sidebar-meta">v{{ app_version }} | Powered by Gemini</p>
+            <p class="sidebar-meta">Engineered for NewsPulse Infrastructure</p>
+        </aside>
+
+        <section class="content">
+            <header class="glass-card hero">
+                <p class="eyebrow">Real-time Global Disruption Intelligence</p>
+                <h1>NewsPulse AI</h1>
+                <p class="hero-copy">
+                    Input a city or country to perform an AI-driven scan of live local news metadata.
+                    We identify environmental, civil, and structural disruptions in seconds.
+                </p>
+            </header>
+
+            <section class="glass-card">
+                <form id="scan-form" class="scan-form">
+                    <h3>Search Parameters</h3>
+                    <label for="location">Location Pointer</label>
+                    <div class="scan-row">
+                        <input
+                            id="location"
+                            name="location"
+                            type="text"
+                            placeholder="e.g. Tokyo, Kyiv, London..."
+                            required
+                        >
+                        <button type="submit">Initialize Deep Scan</button>
+                    </div>
+                </form>
+            </section>
+
+            <section id="status-panel" class="glass-card status-panel hidden">
+                <p id="status-text">Waiting for request...</p>
+            </section>
+
+            <section id="results-panel" class="glass-card results-panel hidden">
+                <div class="results-header">
+                    <h3 id="results-title">Results</h3>
+                    <span id="scan-badge" class="badge">Standby</span>
+                </div>
+
+                <div class="results-grid">
+                    <div class="metric-card">
+                        <span class="metric-label">Disruption Detected</span>
+                        <strong id="disruption-flag">-</strong>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Headlines Processed</span>
+                        <strong id="article-count">0</strong>
+                    </div>
+                </div>
+
+                <div class="reasoning-block">
+                    <h4>AI Reasoning</h4>
+                    <p id="reasoning-text"></p>
+                </div>
+
+                <div>
+                    <h4>Extracted Headlines</h4>
+                    <ul id="headline-list" class="headline-list"></ul>
+                </div>
+            </section>
+
+            <footer class="footer-strip">
+                <span>End-to-End Encrypted</span>
+                <span>Live News Latency: RSS + AI</span>
+                <span>190+ Countries Supported</span>
+            </footer>
+        </section>
+    </main>
+
+    <script>
+        const form = document.getElementById("scan-form");
+        const locationInput = document.getElementById("location");
+        const statusPanel = document.getElementById("status-panel");
+        const statusText = document.getElementById("status-text");
+        const resultsPanel = document.getElementById("results-panel");
+        const resultsTitle = document.getElementById("results-title");
+        const scanBadge = document.getElementById("scan-badge");
+        const disruptionFlag = document.getElementById("disruption-flag");
+        const articleCount = document.getElementById("article-count");
+        const reasoningText = document.getElementById("reasoning-text");
+        const headlineList = document.getElementById("headline-list");
+
+        function showStatus(message, tone = "neutral") {
+            statusPanel.classList.remove("hidden", "danger", "safe");
+            if (tone === "danger") statusPanel.classList.add("danger");
+            if (tone === "safe") statusPanel.classList.add("safe");
+            statusText.textContent = message;
+        }
+
+        function renderResults(data) {
+            resultsPanel.classList.remove("hidden");
+            resultsTitle.textContent = `Results for: ${data.location}`;
+            articleCount.textContent = data.article_count;
+
+            if (!data.analysis) {
+                scanBadge.textContent = "Null Activity";
+                disruptionFlag.textContent = "No data";
+                reasoningText.textContent = "No anomalous activity reported. News traffic appears standard.";
+            } else {
+                const found = data.analysis.disruption_found === true;
+                scanBadge.textContent = found ? "Disruption Detected" : "No Disruption";
+                disruptionFlag.textContent = found ? "true" : "false";
+                reasoningText.textContent = data.analysis.reasoning;
+            }
+
+            headlineList.innerHTML = "";
+            data.articles.forEach((article) => {
+                const item = document.createElement("li");
+                item.innerHTML = `<a href="${article.link}" target="_blank" rel="noreferrer">${article.title}</a><span>${article.published}</span>`;
+                headlineList.appendChild(item);
+            });
+        }
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const location = locationInput.value.trim();
+
+            if (!location) {
+                showStatus("Please specify a location pointer before proceeding.", "danger");
+                return;
+            }
+
+            showStatus(`Accessing news clusters for ${location}...`);
+            resultsPanel.classList.add("hidden");
+
+            try {
+                const response = await fetch("/api/v1/scan", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    body: JSON.stringify({ location, max_articles: 15 })
+                });
+
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(payload.detail || "Request failed.");
+                }
+
+                if (payload.article_count === 0) {
+                    showStatus(`No anomalous activity reported for ${location}. News traffic is standard.`, "safe");
+                } else {
+                    showStatus(`Intelligence processing finalized for ${location}.`, payload.analysis?.disruption_found ? "danger" : "safe");
+                }
+
+                renderResults(payload);
+            } catch (error) {
+                showStatus(`Intelligence failure: ${error.message}`, "danger");
+            }
+        });
+    </script>
+</body>
+</html>
