@@ -154,32 +154,18 @@ if st.button("Initialize Deep Scan"):
                         status.update(label="Intelligence Processing Finalized", state="complete")
                         
                         # 3. Present Intelligence
-                        st.markdown("### Analysis Results")
+                        st.markdown("---")
+                        st.markdown(f"### Results for: {location}")
                         
-                        if result.get("disruption_found") is True:
-                            st.markdown(f"""
-                            <div class="status-box status-danger">
-                                <h2 style="margin:0; color:#ff4b4b !important;">🚨 ACTIVE DISRUPTION</h2>
-                                <p style="font-size: 1.1em; margin-top:10px;">{result.get('reasoning')}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"""
-                            <div class="status-box status-safe">
-                                <h2 style="margin:0; color:#2ecc71 !important;">🏠 LOCATION SECURE</h2>
-                                <p style="font-size: 1.1em; margin-top:10px;">{result.get('reasoning')}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
+                        # Displaying the 'flag' and reasoning as in test_results.md
+                        st.markdown(f"**Disruption Detected**: `{result.get('disruption_found')}`")
+                        st.markdown(f"**AI Reasoning**: {result.get('reasoning')}")
                         
-                        # 4. Source Evidence
-                        with st.expander("Show Evidence (Headlines Found)"):
-                            for a in articles:
-                                st.markdown(f"""
-                                <div style="padding: 8px; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                                    <small style="color:#aaa;">{a['published']}</small><br>
-                                    <a href="{a['link']}" style="color:#ff4b4b; text-decoration:none;">{a['title']}</a>
-                                </div>
-                                """, unsafe_allow_html=True)
+                        # 4. Source Evidence (Headlines)
+                        st.markdown("### Extracted Headlines:")
+                        for a in articles:
+                            # a['title'] usually contains 'Title - Source'
+                            st.markdown(f"- {a['title']} ({a['published']})")
 
                 except Exception as e:
                     st.error(f"Intelligence Failure: {e}")
