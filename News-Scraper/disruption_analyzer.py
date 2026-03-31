@@ -21,16 +21,17 @@ def check_for_disruption(location: str, formatted_news_text: str) -> dict:
     You are an AI disruption monitoring agent. 
     A user wants to know if there is an ongoing or imminent disruption in the location: "{location}".
 
-    A disruption can be:
-    - Natural disaster (earthquake, hurricane, flood, storm)
-    - Civil unrest or large protests
-    - Terrorist attacks or active shooter situations
-    - Major transportation strikes or massive delays
-    - Large-scale power/infrastructure outages
-    - Major political instability disrupting normal life
+    A disruption is EXCLUSIVELY defined as:
+    - Deliveries suspended (Swiggy, Zomato, or general e-commerce)
+    - Government-ordered shutdowns or lockdowns
+    - Natural disasters (floods, storms, earthquakes) that halt infrastructure
+    - Major civil unrest or large-scale protests that stop commercial activity
+    - Large-scale power or infrastructure outages
+    
+    SPECIAL FOCUS: You MUST flag true if news indicates that delivery services (like Swiggy or Zomato) have halted or if the government has announced a city-wide suspension of services.
     
     Given the following recent news headlines about this location, determine if there is a disruption.
-    Be nuanced. Standard crime, minor traffic accidents, or political debates do NOT constitute a location-wide disruption. 
+    Be nuanced. Standard crime, minor localized accidents, or political debates do NOT constitute a disruption for our purposes. 
 
     If there is not enough information to conclude there is a disruption, default to false.
 
