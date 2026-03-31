@@ -32,14 +32,14 @@ st.markdown("""
         border-radius: 10px;
         background-color: #ffecec;
         border: 1px solid #ff4b4b;
-        color: #911;
+        color: #000000;
     }
     .disruption-no {
         padding: 20px;
         border-radius: 10px;
         background-color: #e8f5e9;
         border: 1px solid #2e7d32;
-        color: #1b5e20;
+        color: #000000;
     }
 </style>
 """, unsafe_allow_html=True)
