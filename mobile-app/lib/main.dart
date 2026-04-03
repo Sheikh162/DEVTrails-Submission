@@ -1,27 +1,27 @@
-import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:animate_do/animate_do.dart';
-import 'package:iconsax_flutter/iconsax_flutter.dart';
-import 'package:geolocator/geolocator.dart';
-import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:http/http.dart' as http;
+import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'registration.dart';
 import 'edge_engine.dart';
-import 'sms_engine.dart';
+import 'registration.dart';
+
+const String _apiBaseUrl = 'http://localhost:10000';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await EdgeEngine.init();
-  } catch (e) {}
+  await EdgeEngine.init();
   runApp(const VrittiApp());
 }
 
 class VrittiApp extends StatelessWidget {
   const VrittiApp({super.key});
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -30,417 +30,408 @@ class VrittiApp extends StatelessWidget {
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF006D32)),
       ),
-      initialRoute: '/login',
+      initialRoute: '/registration',
       routes: {
-        '/login': (context) => const LoginScreen(),
-        '/registration': (context) => const RegistrationScreen(),
-        '/main': (context) => const MainNavigationController(),
+        '/registration': (_) => const RegistrationScreen(),
+        '/main': (_) => const MainNavigationController(),
       },
-    );
-  }
-}
-
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
-  @override
-  State<LoginScreen> createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<LoginScreen> {
-  String phone = "";
-  String otp = "";
-  bool otpSent = false;
-  bool isProcessing = false;
-
-  Future<void> _handleAuth() async {
-    setState(() => isProcessing = true);
-    final endpoint = otpSent ? 'verify-otp' : 'request-otp';
-    try {
-      final res = await http.post(
-        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/$endpoint'),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(
-          otpSent ? {"phone": phone, "otp": otp} : {"phone": phone},
-        ),
-      );
-      if (res.statusCode == 200 || res.statusCode == 201) {
-        if (!otpSent)
-          setState(() {
-            otpSent = true;
-            isProcessing = false;
-          });
-        else {
-          final data = jsonDecode(res.body);
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('user_id', data['user']['id']);
-          await prefs.setString('user_name', data['user']['name'] ?? "Rider");
-          if (mounted) Navigator.pushReplacementNamed(context, '/main');
-        }
-      }
-    } catch (e) {
-      setState(() => isProcessing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Padding(
-        padding: const EdgeInsets.all(32.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Iconsax.status_up, color: Color(0xFF006D32), size: 80),
-            const SizedBox(height: 24),
-            Text(
-              "Vritti Login",
-              style: GoogleFonts.outfit(
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 40),
-            TextField(
-              onChanged: (v) => phone = v,
-              decoration: const InputDecoration(
-                hintText: "Phone Number",
-                prefixIcon: Icon(Iconsax.mobile),
-              ),
-            ),
-            if (otpSent) ...[
-              const SizedBox(height: 16),
-              TextField(
-                onChanged: (v) => otp = v,
-                decoration: const InputDecoration(
-                  hintText: "Enter OTP",
-                  prefixIcon: Icon(Iconsax.password_check),
-                ),
-              ),
-            ],
-            const SizedBox(height: 32),
-            SizedBox(
-              width: double.infinity,
-              height: 60,
-              child: ElevatedButton(
-                onPressed: _handleAuth,
-                child: Text(otpSent ? "Verify" : "Send OTP"),
-              ),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pushNamed(context, '/registration'),
-              child: const Text("New Account"),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
 
 class MainNavigationController extends StatefulWidget {
   const MainNavigationController({super.key});
+
   @override
-  State<MainNavigationController> createState() =>
-      _MainNavigationControllerState();
+  State<MainNavigationController> createState() => _MainNavigationControllerState();
 }
 
 class _MainNavigationControllerState extends State<MainNavigationController> {
-  int _selectedIndex = 1;
-  String userId = "",
-      userName = "Rider",
-      bracket = "Calculating...",
-      gps = "Searching...",
-      city = "Chennai";
-  double balance = 0.0, invested = 0.0, credited = 0.0;
-  bool isSecure = true;
+  int _selectedIndex = 0;
+
+  String userId = '';
+  String userName = 'Driver';
+  String city = 'Chennai';
+  String gps = 'Locating...';
+
+  double gullakBalance = 0;
+  double totalPayout = 0;
+  bool policyActive = false;
+
+  bool isFraudFlagged = false;
+  SensorSnapshot sensor = EdgeEngine.lastSnapshot;
+
+  StreamSubscription<Position>? _locationSub;
+  Timer? _heartbeatTimer;
 
   @override
   void initState() {
     super.initState();
-    _load();
-    _syncLocation();
-    Timer.periodic(const Duration(minutes: 5), (t) => _heartbeat());
+    _boot();
   }
 
-  Future<void> _load() async {
+  @override
+  void dispose() {
+    _locationSub?.cancel();
+    _heartbeatTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _boot() async {
     final prefs = await SharedPreferences.getInstance();
-    userId = prefs.getString('user_id') ?? "";
-    userName = prefs.getString('user_name') ?? "Rider";
-    _refresh();
+    userId = prefs.getString('user_id') ?? '';
+    userName = prefs.getString('user_name') ?? 'Driver';
+    city = prefs.getString('user_city') ?? 'Chennai';
+
+    await _refreshDashboard();
+    _startLocationSync();
+    await _runAndSendHeartbeat();
+    _heartbeatTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _runAndSendHeartbeat(),
+    );
+    if (mounted) setState(() {});
   }
 
-  Future<void> _refresh() async {
+  Future<void> _refreshDashboard() async {
     if (userId.isEmpty) return;
     try {
-      final res = await http.get(
-        Uri.parse(
-          'https://vritti-ps1s.onrender.com/api/v1/user/dashboard/$userId',
-        ),
-      );
+      final res = await http.get(Uri.parse('$_apiBaseUrl/api/v1/user/dashboard/$userId'));
       if (res.statusCode == 200) {
-        final d = jsonDecode(res.body);
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
         setState(() {
-          invested = (d['moneyInvested'] ?? 0).toDouble();
-          credited = (d['moneyCredited'] ?? 0).toDouble();
-          balance = (d['currentBalance'] ?? 0).toDouble();
-          bracket = d['incomeBracket'] ?? "Unverified";
+          gullakBalance = (data['currentBalance'] ?? data['walletBalance'] ?? 0).toDouble();
+          totalPayout = (data['moneyCredited'] ?? data['totalPayout'] ?? 0).toDouble();
+          policyActive = (data['policyActive'] ?? true) as bool;
         });
       }
-    } catch (e) {}
+
+      final policyRes = await http.get(Uri.parse('$_apiBaseUrl/api/v1/premium/policies/$userId'));
+      if (policyRes.statusCode == 200) {
+        final raw = jsonDecode(policyRes.body);
+        final first = raw is List && raw.isNotEmpty ? raw.first as Map<String, dynamic> : null;
+        if (first != null && mounted) {
+          setState(() {
+            final status = (first['status'] ?? '').toString().toUpperCase();
+            policyActive = status == 'ACTIVE' || status == 'VERIFIED' || status == 'IN_FORCE';
+          });
+        }
+      }
+    } catch (_) {
+      // Keep stale UI values if server is unavailable.
+    }
   }
 
-  void _syncLocation() {
-    Geolocator.getPositionStream(
+  void _startLocationSync() {
+    _locationSub?.cancel();
+    _locationSub = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-    ).listen((p) async {
-      if (mounted)
-        setState(
-          () => gps =
-              "${p.latitude.toStringAsFixed(2)}, ${p.longitude.toStringAsFixed(2)}",
-        );
+    ).listen((pos) async {
+      final coords = '${pos.latitude.toStringAsFixed(3)}, ${pos.longitude.toStringAsFixed(3)}';
+      if (mounted) setState(() => gps = coords);
+      if (userId.isEmpty) return;
+
       try {
         await http.post(
-          Uri.parse('https://vritti-ps1s.onrender.com/api/v1/user/location'),
-          headers: {"Content-Type": "application/json"},
+          Uri.parse('$_apiBaseUrl/api/v1/user/location'),
+          headers: {'Content-Type': 'application/json'},
           body: jsonEncode({
-            "userId": userId,
-            "latitude": p.latitude,
-            "longitude": p.longitude,
-            "city": city,
+            'userId': userId,
+            'latitude': pos.latitude,
+            'longitude': pos.longitude,
+            'city': city,
           }),
         );
-      } catch (e) {}
+      } catch (_) {}
     });
   }
 
-  Future<void> _heartbeat() async {
-    bool valid = await EdgeEngine.runInference();
-    setState(() => isSecure = valid);
+  Future<void> _runAndSendHeartbeat() async {
+    if (userId.isEmpty) return;
+
+    final snapshot = await EdgeEngine.runInference();
     try {
       await http.post(
-        Uri.parse('https://vritti-ps1s.onrender.com/api/heartbeat'),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "userId": userId,
-          "status": valid ? 'VERIFIED' : 'FRAUD_FLAG',
-        }),
+        Uri.parse('$_apiBaseUrl/api/heartbeat'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'userId': userId, 'status': snapshot.heartbeatStatus}),
       );
-    } catch (e) {}
+
+      final statusRes = await http.get(Uri.parse('$_apiBaseUrl/api/v1/user/heartbeat/$userId'));
+      if (statusRes.statusCode == 200) {
+        final body = jsonDecode(statusRes.body) as Map<String, dynamic>;
+        final status = (body['status'] ?? snapshot.heartbeatStatus).toString().toUpperCase();
+        isFraudFlagged = status.contains('FLAG');
+      } else {
+        isFraudFlagged = snapshot.isFlagged;
+      }
+    } catch (_) {
+      isFraudFlagged = snapshot.isFlagged;
+    }
+
+    if (mounted) {
+      setState(() {
+        sensor = snapshot;
+      });
+    }
   }
 
-  Future<void> invest() async {
-    try {
-      final res = await http.post(
-        Uri.parse('https://vritti-ps1s.onrender.com/api/premium/invest'),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"userId": userId, "amount": 200}),
+  Future<void> _claimPayout() async {
+    if (userId.isEmpty) return;
+
+    final logs = <String>[];
+
+    Future<void> addLog(String line) async {
+      logs.add(line);
+      if (!mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _ClaimLogDialog(logs: List<String>.from(logs)),
       );
-      if (res.statusCode == 200) _refresh();
-    } catch (e) {}
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+
+    await addLog('Policy check ✓');
+    final policyRes = await http.get(Uri.parse('$_apiBaseUrl/api/v1/premium/policies/$userId'));
+    if (policyRes.statusCode >= 400) {
+      _snack('Policy not active');
+      return;
+    }
+
+    await addLog('News Scraper ✓');
+    await http.get(Uri.parse('$_apiBaseUrl/api/v1/intelligence/status/$city'));
+
+    await addLog('Weather ✓');
+    await http.get(Uri.parse('$_apiBaseUrl/api/v1/intelligence/history/$city'));
+
+    await addLog('Edge Engine ✓');
+    await _runAndSendHeartbeat();
+
+    final claimRes = await http.post(
+      Uri.parse('$_apiBaseUrl/api/v1/claims/one-touch'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'userId': userId, 'city': city}),
+    );
+
+    if (!mounted) return;
+
+    if (claimRes.statusCode == 200 || claimRes.statusCode == 201) {
+      final body = jsonDecode(claimRes.body) as Map<String, dynamic>;
+      final amount = (body['amount'] ?? body['payoutAmount'] ?? 500).toDouble();
+      setState(() => gullakBalance += amount);
+      _snack('₹${amount.toStringAsFixed(0)} added to Gullak!');
+      await _refreshDashboard();
+    } else {
+      String message = 'Claim rejected';
+      try {
+        final body = jsonDecode(claimRes.body) as Map<String, dynamic>;
+        message = body['message']?.toString() ?? message;
+      } catch (_) {}
+      _snack(message);
+    }
+  }
+
+  void _snack(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message), behavior: SnackBarBehavior.floating));
   }
 
   @override
   Widget build(BuildContext context) {
     final screens = [
-      InfoScreen(
-        gps: gps,
+      DashboardScreen(
+        name: userName,
         city: city,
-        isSecure: isSecure,
-        onRefresh: _heartbeat,
+        gps: gps,
+        walletBalance: gullakBalance,
+        policyActive: policyActive,
+        isFraudFlagged: isFraudFlagged,
+        sensor: sensor,
+        onClaimTap: _claimPayout,
+        onManualHeartbeat: _runAndSendHeartbeat,
       ),
-      HomeScreen(name: userName, invested: invested, onInvest: invest),
       ProfileScreen(
         name: userName,
-        balance: balance,
-        payouts: credited,
-        bracket: bracket,
+        city: city,
+        walletBalance: gullakBalance,
+        totalPayout: totalPayout,
+        policyActive: policyActive,
       ),
     ];
+
     return Scaffold(
       backgroundColor: const Color(0xFFF9FBF9),
-      body: screens[_selectedIndex],
-      bottomNavigationBar: _buildNav(),
+      body: SafeArea(child: screens[_selectedIndex]),
+      bottomNavigationBar: Container(
+        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(40)),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _navItem(0, Iconsax.home, 'Dashboard'),
+            _navItem(1, Iconsax.user, 'Profile'),
+          ],
+        ),
+      ),
     );
   }
 
-  Widget _buildNav() => Container(
-    padding: const EdgeInsets.all(16),
-    margin: const EdgeInsets.all(16),
-    decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(40),
-    ),
-    child: Row(
-      mainAxisAlignment: MainAxisAlignment.spaceAround,
-      children: [
-        _nav(0, Iconsax.security_safe, "Security"),
-        _nav(1, Iconsax.home, "Home"),
-        _nav(2, Iconsax.user, "Profile"),
-      ],
-    ),
-  );
-  Widget _nav(int i, IconData ic, String l) => GestureDetector(
-    onTap: () => setState(() => _selectedIndex = i),
-    child: AnimatedContainer(
-      duration: const Duration(milliseconds: 300),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: _selectedIndex == i
-            ? const Color(0xFF006D32)
-            : Colors.transparent,
-        borderRadius: BorderRadius.circular(24),
+  Widget _navItem(int index, IconData icon, String label) {
+    final selected = _selectedIndex == index;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedIndex = index),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 250),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF006D32) : Colors.transparent,
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: selected ? Colors.white : Colors.grey[700]),
+            const SizedBox(width: 6),
+            Text(label, style: TextStyle(color: selected ? Colors.white : Colors.grey[700])),
+          ],
+        ),
       ),
+    );
+  }
+}
+
+class DashboardScreen extends StatelessWidget {
+  const DashboardScreen({
+    super.key,
+    required this.name,
+    required this.city,
+    required this.gps,
+    required this.walletBalance,
+    required this.policyActive,
+    required this.isFraudFlagged,
+    required this.sensor,
+    required this.onClaimTap,
+    required this.onManualHeartbeat,
+  });
+
+  final String name;
+  final String city;
+  final String gps;
+  final double walletBalance;
+  final bool policyActive;
+  final bool isFraudFlagged;
+  final SensorSnapshot sensor;
+  final VoidCallback onClaimTap;
+  final VoidCallback onManualHeartbeat;
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(ic, color: _selectedIndex == i ? Colors.white : Colors.grey),
-          Text(
-            l,
-            style: TextStyle(
-              fontSize: 10,
-              color: _selectedIndex == i ? Colors.white : Colors.grey,
+          Text('Namaste, $name', style: GoogleFonts.outfit(fontSize: 28, fontWeight: FontWeight.w800)),
+          Text('City: $city', style: const TextStyle(color: Colors.grey)),
+          const SizedBox(height: 18),
+          _walletCard(),
+          const SizedBox(height: 16),
+          _policyCard(),
+          const SizedBox(height: 16),
+          _sensorCard(),
+          const SizedBox(height: 16),
+          _fraudCard(),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton(
+              onPressed: onClaimTap,
+              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF006D32), foregroundColor: Colors.white),
+              child: const Text('Claim Payout'),
             ),
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: OutlinedButton(onPressed: onManualHeartbeat, child: const Text('Refresh Fraud Indicator')),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _walletCard() => _card(
+    'Gullak Balance',
+    '₹${walletBalance.toStringAsFixed(2)}',
+    Iconsax.wallet,
+    const Color(0xFF006D32),
+  );
+
+  Widget _policyCard() => _card(
+    'Policy Status',
+    policyActive ? 'ACTIVE' : 'INACTIVE',
+    Iconsax.shield_tick,
+    policyActive ? Colors.green : Colors.orange,
+  );
+
+  Widget _sensorCard() => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Edge Engine Sensor Readings', style: TextStyle(fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Text('GPS: $gps'),
+        Text('Speed: ${sensor.speedKmh.toStringAsFixed(1)} km/h'),
+        Text('Accel Energy: ${sensor.accelEnergy.toStringAsFixed(2)}'),
+        Text('MAE mismatch: ${sensor.mae.toStringAsFixed(2)}'),
+      ],
     ),
   );
-}
 
-class HomeScreen extends StatelessWidget {
-  final String name;
-  final double invested;
-  final VoidCallback onInvest;
-  const HomeScreen({
-    super.key,
-    required this.name,
-    required this.invested,
-    required this.onInvest,
-  });
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Namaste, $name",
-              style: GoogleFonts.outfit(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 24),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: const Color(0xFF006D32),
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    "TOTAL SAFETY INVESTMENTS",
-                    style: TextStyle(color: Colors.white70, fontSize: 12),
-                  ),
-                  Text(
-                    "₹${invested.toStringAsFixed(2)}",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 42,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const Divider(color: Colors.white24, height: 32),
-                  const Text(
-                    "Active Protection Active",
-                    style: TextStyle(color: Colors.white, fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              height: 60,
-              child: ElevatedButton(
-                onPressed: onInvest,
-                child: const Text("Purchase Safety SIP (₹200)"),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class ProfileScreen extends StatelessWidget {
-  final String name, bracket;
-  final double balance, payouts;
-  const ProfileScreen({
-    super.key,
-    required this.name,
-    required this.balance,
-    required this.payouts,
-    required this.bracket,
-  });
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          children: [
-            const CircleAvatar(
-              radius: 50,
-              backgroundColor: Color(0xFF006D32),
-              child: Icon(Iconsax.user, color: Colors.white, size: 40),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              name,
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 32),
-            _box("Balance", "₹${balance.toStringAsFixed(2)}", Iconsax.wallet),
-            const SizedBox(height: 12),
-            _box(
-              "Total Payouts",
-              "₹${payouts.toStringAsFixed(2)}",
-              Iconsax.receive_square,
-            ),
-            const SizedBox(height: 12),
-            _box("Income Tier", bracket, Iconsax.status_up),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _box(String l, String v, IconData i) => Container(
-    padding: const EdgeInsets.all(20),
+  Widget _fraudCard() => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
     decoration: BoxDecoration(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(20),
-      border: Border.all(color: Colors.grey.shade100),
+      color: isFraudFlagged ? Colors.red.shade50 : Colors.green.shade50,
+      borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: isFraudFlagged ? Colors.red : Colors.green),
     ),
     child: Row(
       children: [
-        Icon(i),
-        const SizedBox(width: 16),
+        Icon(Iconsax.security_safe, color: isFraudFlagged ? Colors.red : Colors.green),
+        const SizedBox(width: 10),
+        Text(
+          isFraudFlagged ? 'FRAUD INDICATOR: RED' : 'FRAUD INDICATOR: GREEN',
+          style: TextStyle(
+            fontWeight: FontWeight.w700,
+            color: isFraudFlagged ? Colors.red : Colors.green,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _card(String label, String value, IconData icon, Color color) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+    child: Row(
+      children: [
+        Icon(icon, color: color),
+        const SizedBox(width: 12),
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(l, style: const TextStyle(fontSize: 10, color: Colors.grey)),
-            Text(
-              v,
-              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
-            ),
+            Text(label, style: const TextStyle(color: Colors.grey)),
+            Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
           ],
         ),
       ],
@@ -448,67 +439,73 @@ class ProfileScreen extends StatelessWidget {
   );
 }
 
-class InfoScreen extends StatelessWidget {
-  final String gps, city;
-  final bool isSecure;
-  final VoidCallback onRefresh;
-  const InfoScreen({
+class ProfileScreen extends StatelessWidget {
+  const ProfileScreen({
     super.key,
-    required this.gps,
+    required this.name,
     required this.city,
-    required this.isSecure,
-    required this.onRefresh,
+    required this.walletBalance,
+    required this.totalPayout,
+    required this.policyActive,
   });
+
+  final String name;
+  final String city;
+  final double walletBalance;
+  final double totalPayout;
+  final bool policyActive;
+
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Security Hub",
-              style: GoogleFonts.outfit(
-                fontSize: 32,
-                fontWeight: FontWeight.w900,
-                color: const Color(0xFF006D32),
-              ),
-            ),
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(30),
-              ),
-              child: Column(
-                children: [
-                  Text("GPS: $gps"),
-                  const Divider(height: 40),
-                  Text("INTEGRITY: ${isSecure ? 'SECURE' : 'FLAGGED'}"),
-                ],
-              ),
-            ),
-            const Spacer(),
-            _btn("Refresh Integrity", onRefresh),
-          ],
-        ),
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        children: [
+          const CircleAvatar(
+            radius: 38,
+            backgroundColor: Color(0xFF006D32),
+            child: Icon(Iconsax.user, size: 32, color: Colors.white),
+          ),
+          const SizedBox(height: 12),
+          Text(name, style: GoogleFonts.outfit(fontSize: 24, fontWeight: FontWeight.bold)),
+          Text(city, style: const TextStyle(color: Colors.grey)),
+          const SizedBox(height: 24),
+          _line('Gullak Balance', '₹${walletBalance.toStringAsFixed(2)}'),
+          _line('Total Payout Received', '₹${totalPayout.toStringAsFixed(2)}'),
+          _line('Policy', policyActive ? 'Active' : 'Inactive'),
+        ],
       ),
     );
   }
 
-  Widget _btn(String t, VoidCallback p) => SizedBox(
-    width: double.infinity,
-    height: 60,
-    child: ElevatedButton(
-      onPressed: p,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: const Color(0xFF006D32),
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      ),
-      child: Text(t),
+  Widget _line(String k, String v) => Container(
+    margin: const EdgeInsets.only(bottom: 12),
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16)),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [Text(k), Text(v, style: const TextStyle(fontWeight: FontWeight.w700))],
     ),
   );
+}
+
+class _ClaimLogDialog extends StatelessWidget {
+  const _ClaimLogDialog({required this.logs});
+
+  final List<String> logs;
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Claim pipeline'),
+      content: SizedBox(
+        width: 280,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: logs.map((line) => Padding(padding: const EdgeInsets.only(bottom: 6), child: Text(line))).toList(),
+        ),
+      ),
+    );
+  }
 }
