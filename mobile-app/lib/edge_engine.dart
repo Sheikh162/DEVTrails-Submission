@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+String _edgeTs() => DateTime.now().toIso8601String();
+
 class EdgeEngine {
   static List<double> _vibrationBuffer = [];
   static List<double> _speedBuffer = [];
@@ -17,6 +19,7 @@ class EdgeEngine {
 
   /// Initializes multiple sensor streams for data fusion
   static Future<void> init() async {
+    debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Initializing sensor streams...");
     // 1. Accelerometer Stream for Engine/Road Vibration (Physical Truth)
     _accelSub = userAccelerometerEvents.listen((event) {
       double magnitude = sqrt(
@@ -34,12 +37,16 @@ class EdgeEngine {
         pow(event.x, 2) + pow(event.y, 2) + pow(event.z, 2),
       );
     });
+    debugPrint(
+      "[${_edgeTs()}] [EDGE_ENGINE] Sensor streams active. Buffers => vibration:${_vibrationBuffer.length}, speed:${_speedBuffer.length}",
+    );
   }
 
   /// Runs the statistical inference model to detect Fraud (e.g., GPS Spoofing)
   /// Called by main.dart every 30 seconds for heartbeat and batch sync
   static Future<Map<String, dynamic>> runInference() async {
     try {
+      debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Running inference cycle...");
       Position pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
         timeLimit: const Duration(seconds: 4),
@@ -79,10 +86,17 @@ class EdgeEngine {
       }
 
       debugPrint(
-        "EDGE AI: [r: ${correlation.toStringAsFixed(2)}] [Gyro: ${_currentGyroEnergy.toStringAsFixed(2)}] [Secure: $isSecure]",
+        "[${_edgeTs()}] [EDGE_ENGINE] Inference Result => {"
+        "correlation:${correlation.toStringAsFixed(3)}, "
+        "gyroEnergy:${_currentGyroEnergy.toStringAsFixed(3)}, "
+        "speedKmH:${currentSpeed.toStringAsFixed(2)}, "
+        "distanceKm:${(_totalDistance / 1000).toStringAsFixed(3)}, "
+        "isSecure:$isSecure, "
+        "isMocked:${pos.isMocked}"
+        "}",
       );
 
-      return {
+      final payload = {
         "isSecure": isSecure,
         "maeScore": correlation.clamp(
           0.0,
@@ -91,8 +105,10 @@ class EdgeEngine {
         "distance": _totalDistance / 1000, // Convert to KM
         "speed": currentSpeed,
       };
+      debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Payload => $payload");
+      return payload;
     } catch (e) {
-      debugPrint("Edge Engine Inference Fail: $e");
+      debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Inference failed => $e");
       return {
         "isSecure": false,
         "maeScore": 0.0,
