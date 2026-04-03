@@ -16,14 +16,14 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final PageController _pageController = PageController();
   int _currentStep = 0;
 
-  // Form Data
   String name = "";
   String phone = "";
+  String otp = "";
   String selectedPlatform = "Swiggy";
   String workCity = "Chennai";
 
   bool isProcessing = false;
-  String statusText = "Initializing secure wallet...";
+  String statusText = "Verifying...";
 
   void _nextPage() {
     _pageController.nextPage(
@@ -33,51 +33,56 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     setState(() => _currentStep++);
   }
 
-  // --- API CALL: REGISTER DRIVER ---
-  Future<void> _completeRegistration() async {
-    if (name.isEmpty || phone.isEmpty) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("Please fill all fields")));
-      return;
-    }
-
+  Future<void> _requestOTP() async {
+    if (phone.length < 10) return;
     setState(() {
       isProcessing = true;
-      statusText = "Creating Vritti Identity...";
+      statusText = "Requesting OTP...";
     });
-
     try {
-      final regResponse = await http.post(
-        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/register'),
+      final res = await http.post(
+        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/request-otp'),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({"phone": phone}),
+      );
+      if (res.statusCode == 200) {
+        setState(() => isProcessing = false);
+        _nextPage();
+      }
+    } catch (e) {
+      setState(() => isProcessing = false);
+    }
+  }
+
+  Future<void> _verifyAndRegister() async {
+    setState(() {
+      isProcessing = true;
+      statusText = "Creating Global Wallet...";
+    });
+    try {
+      final res = await http.post(
+        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/verify-otp'),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({
-          "name": name,
           "phone": phone,
+          "otp": otp,
+          "name": name,
           "platform": selectedPlatform,
           "city": workCity,
         }),
       );
 
-      if (regResponse.statusCode == 200 || regResponse.statusCode == 201) {
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('user_name', name);
+        await prefs.setString('user_id', data['user']['id']);
+        await prefs.setString('user_name', data['user']['name']);
         await prefs.setString('user_phone', phone);
-        await prefs.setString('user_platform', selectedPlatform);
         await prefs.setString('user_city', workCity);
-
         if (mounted) Navigator.pushReplacementNamed(context, '/main');
-      } else {
-        setState(() {
-          isProcessing = false;
-          statusText = "Error: Phone already registered?";
-        });
       }
     } catch (e) {
-      setState(() {
-        isProcessing = false;
-        statusText = "Network Error. Try again.";
-      });
+      setState(() => isProcessing = false);
     }
   }
 
@@ -94,7 +99,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               child: PageView(
                 controller: _pageController,
                 physics: const NeverScrollableScrollPhysics(),
-                children: [_buildStep1(), _buildStep2(), _buildStep3()],
+                children: [_step1(), _step2(), _step3()],
               ),
             ),
           ],
@@ -103,211 +108,137 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     );
   }
 
-  Widget _buildStepIndicator() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 40),
-      child: Row(
-        children: List.generate(3, (index) {
-          return Expanded(
-            child: Container(
-              height: 4,
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              decoration: BoxDecoration(
-                color: _currentStep >= index
-                    ? const Color(0xFF006D32)
-                    : Colors.grey[300],
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-          );
-        }),
-      ),
-    );
-  }
-
-  Widget _buildStep1() {
-    return Padding(
-      padding: const EdgeInsets.all(32.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          FadeInDown(
-            child: Text(
-              "Create your\nSafety Identity",
-              style: GoogleFonts.outfit(
-                fontSize: 32,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
+  Widget _buildStepIndicator() => Row(
+    children: List.generate(
+      3,
+      (i) => Expanded(
+        child: Container(
+          height: 4,
+          margin: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: BoxDecoration(
+            color: _currentStep >= i
+                ? const Color(0xFF006D32)
+                : Colors.grey[300],
+            borderRadius: BorderRadius.circular(2),
           ),
-          const SizedBox(height: 40),
-          _buildTextField("Full Name", Iconsax.user, (val) => name = val),
-          const SizedBox(height: 20),
-          _buildTextField(
-            "Mobile Number",
-            Iconsax.mobile,
-            (val) => phone = val,
-          ),
-          const Spacer(),
-          _buildPrimaryButton("Continue", _nextPage),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStep2() {
-    return Padding(
-      padding: const EdgeInsets.all(32.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Where do you work?",
-            style: GoogleFonts.outfit(
-              fontSize: 28,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 40),
-          _buildDropdown(
-            "Platform",
-            selectedPlatform,
-            ["Swiggy", "Zomato", "Uber Eats"],
-            (val) => setState(() => selectedPlatform = val!),
-          ),
-          const SizedBox(height: 20),
-          _buildDropdown("Base City", workCity, [
-            "Chennai",
-            "Mumbai",
-            "Delhi",
-            "Bangalore",
-          ], (val) => setState(() => workCity = val!)),
-          const Spacer(),
-          _buildPrimaryButton("Next: Finalize", _nextPage),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStep3() {
-    return Padding(
-      padding: const EdgeInsets.all(32.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          const Icon(Iconsax.shield_tick, size: 80, color: Color(0xFF006D32)),
-          const SizedBox(height: 24),
-          Text(
-            "Verified Onboarding",
-            style: GoogleFonts.outfit(
-              fontSize: 24,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            "Your initial wallet will be seeded with ₹12,450 to cover your first parametric policies.",
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.grey[600]),
-          ),
-          const SizedBox(height: 40),
-          Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: Colors.black.withOpacity(0.05)),
-            ),
-            child: Column(
-              children: [
-                if (isProcessing)
-                  const CircularProgressIndicator(color: Color(0xFF006D32))
-                else
-                  const Icon(
-                    Iconsax.verify,
-                    color: Color(0xFF006D32),
-                    size: 40,
-                  ),
-                const SizedBox(height: 12),
-                Text(
-                  statusText,
-                  style: const TextStyle(fontSize: 14, color: Colors.grey),
-                ),
-              ],
-            ),
-          ),
-          const Spacer(),
-          _buildPrimaryButton(
-            isProcessing ? "Connecting..." : "Finish & Enter Vritti",
-            _completeRegistration,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTextField(
-    String hint,
-    IconData icon,
-    Function(String) onChanged,
-  ) {
-    return TextField(
-      onChanged: onChanged,
-      decoration: InputDecoration(
-        prefixIcon: Icon(icon, color: const Color(0xFF006D32)),
-        hintText: hint,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
-          borderSide: BorderSide.none,
         ),
       ),
-    );
-  }
+    ),
+  );
 
-  Widget _buildDropdown(
-    String label,
-    String value,
-    List<String> items,
-    Function(String?) onChanged,
-  ) {
-    return DropdownButtonFormField<String>(
-      value: value,
-      decoration: InputDecoration(
-        labelText: label,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(20),
-          borderSide: BorderSide.none,
+  Widget _step1() => Padding(
+    padding: const EdgeInsets.all(32.0),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Safety SIP",
+          style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.w800),
         ),
-      ),
-      items: items
-          .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-          .toList(),
-      onChanged: onChanged,
-    );
-  }
+        const SizedBox(height: 40),
+        _field("Full Name", Iconsax.user, (v) => name = v),
+        const SizedBox(height: 20),
+        _field("Phone Number", Iconsax.mobile, (v) => phone = v),
+        const Spacer(),
+        _btn(isProcessing ? "Processing..." : "Request OTP", _requestOTP),
+      ],
+    ),
+  );
 
-  Widget _buildPrimaryButton(String text, VoidCallback onPressed) {
-    return SizedBox(
-      width: double.infinity,
-      height: 60,
-      child: ElevatedButton(
-        onPressed: onPressed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF006D32),
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
+  Widget _step2() => Padding(
+    padding: const EdgeInsets.all(32.0),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Verify OTP",
+          style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 12),
+        Text(
+          "Enter the code sent to $phone",
+          style: const TextStyle(color: Colors.grey),
+        ),
+        const SizedBox(height: 40),
+        _field("6-digit Code", Iconsax.password_check, (v) => otp = v),
+        const Spacer(),
+        _btn("Verify Code", _nextPage),
+      ],
+    ),
+  );
+
+  Widget _step3() => Padding(
+    padding: const EdgeInsets.all(32.0),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Work Zone",
+          style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.w800),
+        ),
+        const SizedBox(height: 40),
+        _drop("Platform", selectedPlatform, [
+          "Swiggy",
+          "Zomato",
+          "Uber Eats",
+        ], (v) => setState(() => selectedPlatform = v!)),
+        const SizedBox(height: 20),
+        _drop("City", workCity, [
+          "Chennai",
+          "Mumbai",
+          "Delhi",
+          "Bangalore",
+        ], (v) => setState(() => workCity = v!)),
+        const Spacer(),
+        _btn(
+          isProcessing ? "Finalizing..." : "Finish Onboarding",
+          _verifyAndRegister,
+        ),
+      ],
+    ),
+  );
+
+  Widget _field(String h, IconData i, Function(String) o) => TextField(
+    onChanged: o,
+    decoration: InputDecoration(
+      prefixIcon: Icon(i),
+      hintText: h,
+      filled: true,
+      fillColor: Colors.white,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(20),
+        borderSide: BorderSide.none,
+      ),
+    ),
+  );
+  Widget _drop(String l, String v, List<String> i, Function(String?) o) =>
+      DropdownButtonFormField<String>(
+        value: v,
+        decoration: InputDecoration(
+          labelText: l,
+          filled: true,
+          fillColor: Colors.white,
+          border: OutlineInputBorder(
             borderRadius: BorderRadius.circular(20),
+            borderSide: BorderSide.none,
           ),
         ),
-        child: Text(
-          text,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-        ),
+        items: i
+            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+            .toList(),
+        onChanged: o,
+      );
+  Widget _btn(String t, VoidCallback p) => SizedBox(
+    width: double.infinity,
+    height: 60,
+    child: ElevatedButton(
+      onPressed: p,
+      style: ElevatedButton.styleFrom(
+        backgroundColor: const Color(0xFF006D32),
+        foregroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       ),
-    );
-  }
+      child: Text(t),
+    ),
+  );
 }

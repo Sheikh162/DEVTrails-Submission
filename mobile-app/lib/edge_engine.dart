@@ -13,7 +13,7 @@ class EdgeEngine {
       double instantEnergy = sqrt(
         pow(event.x, 2) + pow(event.y, 2) + pow(event.z, 2),
       );
-      // EMA Filter: Smooths out spikes. Requires consistent movement.
+      // EMA Filter: requires consistent movement to pass
       _emaEnergy = (instantEnergy * 0.15) + (_emaEnergy * 0.85);
     });
   }
@@ -28,19 +28,16 @@ class EdgeEngine {
       double speedKmh = pos.speed * 3.6;
       double vNorm = (speedKmh / 60.0).clamp(0.0, 1.0);
       double aNorm = (_emaEnergy / 12.0).clamp(0.0, 1.0);
-
-      // Mean Absolute Error between GPS Velocity and Physical Vibration
       double inertialMAE = (vNorm - aNorm).abs();
 
       // STRICT THRESHOLD: 0.35
       bool isSecure = inertialMAE < 0.35 && !pos.isMocked;
-
       debugPrint(
-        "EDGE AI: MAE ${inertialMAE.toStringAsFixed(2)} | Speed: ${speedKmh.toStringAsFixed(1)}",
+        "EDGE AI: MAE ${inertialMAE.toStringAsFixed(2)} | Secure: $isSecure",
       );
       return isSecure;
     } catch (e) {
-      return false; // Fail-safe: If sensors fail, don't allow the claim
+      return false; // Fail-safe: Block claims if sensors malfunction
     }
   }
 
