@@ -11,3 +11,24 @@ __pycache__/
 *.txt
 !requirements.txt
 *.log
+# Python env / local packages
+.python_packages/
+.web_packages/
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Model/data artifacts
+models/
+
+data_summary.txt
+training_log.json
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
