@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:animate_do/animate_do.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:iconsax_flutter/iconsax_flutter.dart';
@@ -30,8 +31,30 @@ String _prettyJson(dynamic data) {
   }
 }
 
+class AppSecrets {
+  static String godModePassword = '123';
+
+  static Future<void> load() async {
+    try {
+      final raw = await rootBundle.loadString('.env');
+      for (final line in raw.split('\n')) {
+        final trimmed = line.trim();
+        if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
+        final index = trimmed.indexOf('=');
+        if (index == -1) continue;
+        final key = trimmed.substring(0, index).trim();
+        final value = trimmed.substring(index + 1).trim();
+        if (key == 'GODMODE_PASSWORD' && value.isNotEmpty) {
+          godModePassword = value;
+        }
+      }
+    } catch (_) {}
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await AppSecrets.load();
   await EdgeEngine.init();
   runApp(const VrittiApp());
 }
@@ -96,7 +119,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _log('REQUEST => POST /api/v1/auth/request-otp payload=$payload');
     try {
       final res = await http.post(
-        Uri.parse('https://vritti-6zip.onrender.com/api/v1/auth/request-otp'),
+        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/request-otp'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       );
@@ -124,7 +147,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final res = await http.post(
-        Uri.parse('https://vritti-6zip.onrender.com/api/v1/auth/verify-otp'),
+        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/verify-otp'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       );
@@ -216,20 +239,48 @@ class DemoDashboardScreen extends StatefulWidget {
 }
 
 class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
+  static const Duration _heartbeatInterval = Duration(seconds: 10);
+  static const String _baseUrl = 'https://vritti-ps1s.onrender.com';
+
   String userId = '';
   String userName = 'Rider';
+  String userCity = 'Chennai';
 
   num premiumInvested = 0;
   num weeklyEarnings = 0;
   num walletBalance = 0;
   String currentStatus = 'UNKNOWN';
   List<dynamic> notifications = [];
+  bool pricingLoading = false;
+  num pricingBasePremium = 0;
+  num pricingFinalPremium = 0;
+  num pricingWRiskScore = 0;
+  num pricingRAlertMultiplier = 1;
+  String pricingSource = 'unavailable';
+  String pricingCurrency = 'INR';
+  String pricingTimestamp = '-';
+  String pricingConfidence = '-';
+  String pricingZoneId = '-';
+  String pricingAlertSource = '-';
+  num pricingDiscountPct = 0;
+  num pricingImdLevel = 0;
+  num pricingMaxTemp = 0;
+  bool pricingEngineReady = false;
+  String pricingEngineStatus = 'unknown';
+  String pricingModelTrainedAt = '-';
+  int pricingTrainingRows = 0;
+  num pricingDriftThreshold = 0;
+  num pricingBaselineWRisk = 0;
+  List<dynamic> pricingTopRiskFactors = [];
+  Map<String, dynamic>? pricingEngineResponse;
+  Map<String, dynamic>? pricingMlPayload;
 
   bool loadingWeek = false;
   bool loadingClaim = false;
 
   Timer? heartbeatTimer;
   final List<String> terminalLogs = [];
+  bool godModeEnabled = false;
 
   void _log(String scope, String msg) {
     final line = '[${_ts()}] [$scope] $msg';
@@ -267,6 +318,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
     final prefs = await SharedPreferences.getInstance();
     userId = prefs.getString('user_id') ?? '';
     userName = prefs.getString('user_name') ?? 'Rider';
+    userCity = prefs.getString('user_city') ?? 'Chennai';
     _log('BOOT', 'Loaded session userId=$userId userName=$userName');
     if (userId.isEmpty) {
       _log('BOOT', 'No user session found. Redirecting to login.');
@@ -274,20 +326,20 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       return;
     }
     await _fetchDashboard();
+    await _fetchPricingBundle(includeDiagnostics: godModeEnabled);
     _startTelemetryLoop();
   }
 
   void _startTelemetryLoop() {
     heartbeatTimer?.cancel();
-    heartbeatTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
+    heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) async {
       await _sendHeartbeat();
     });
-    _log('TELEMETRY', 'Started 1-second heartbeat loop for demo mode.');
+    _log('TELEMETRY', 'Started 10-second heartbeat loop for demo mode.');
   }
 
   Future<void> _fetchDashboard() async {
-    final url =
-        'https://vritti-6zip.onrender.com/api/v1/user/dashboard/$userId';
+    final url = '$_baseUrl/api/v1/user/dashboard/$userId';
     _log('DASHBOARD', 'REQUEST => GET $url');
     try {
       final res = await http.get(Uri.parse(url));
@@ -303,6 +355,156 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       });
     } catch (e) {
       _log('DASHBOARD', 'EXCEPTION => $e');
+    }
+  }
+
+  Future<void> _fetchPricingBundle({required bool includeDiagnostics}) async {
+    if (userId.isEmpty) return;
+
+    setState(() => pricingLoading = true);
+    final city = userCity.trim().isEmpty ? 'Chennai' : userCity.trim();
+    final encodedCity = Uri.encodeComponent(city);
+
+    try {
+      final quoteUri = Uri.parse(
+        '$_baseUrl/api/v1/pricing/quote/$userId?city=$encodedCity',
+      );
+      final healthUri = Uri.parse('$_baseUrl/api/v1/pricing/health');
+      final alertUri = Uri.parse('$_baseUrl/api/v1/pricing/r-alert/$encodedCity');
+
+      _log('PRICING_QUOTE', 'REQUEST => GET $quoteUri');
+      _log('PRICING_HEALTH', 'REQUEST => GET $healthUri');
+      _log('PRICING_ALERT', 'REQUEST => GET $alertUri');
+
+      final quoteFuture = http.get(
+        quoteUri,
+        headers: {'Accept': 'application/json'},
+      );
+      final healthFuture = http.get(
+        healthUri,
+        headers: {'Accept': 'application/json'},
+      );
+      final alertFuture = http.get(
+        alertUri,
+        headers: {'Accept': 'application/json'},
+      );
+
+      final responses = await Future.wait([
+        quoteFuture,
+        healthFuture,
+        alertFuture,
+      ]);
+
+      final quoteRes = responses[0];
+      final healthRes = responses[1];
+      final alertRes = responses[2];
+
+      _log(
+        'PRICING_QUOTE',
+        'RESPONSE <= ${quoteRes.statusCode} body=${quoteRes.body}',
+      );
+      _log(
+        'PRICING_HEALTH',
+        'RESPONSE <= ${healthRes.statusCode} body=${healthRes.body}',
+      );
+      _log(
+        'PRICING_ALERT',
+        'RESPONSE <= ${alertRes.statusCode} body=${alertRes.body}',
+      );
+
+      Map<String, dynamic>? quoteMap;
+      Map<String, dynamic>? healthMap;
+      Map<String, dynamic>? alertMap;
+      Map<String, dynamic>? demoMap;
+
+      if (quoteRes.statusCode == 200) {
+        quoteMap = jsonDecode(quoteRes.body) as Map<String, dynamic>;
+      }
+      if (healthRes.statusCode == 200) {
+        healthMap = jsonDecode(healthRes.body) as Map<String, dynamic>;
+      }
+      if (alertRes.statusCode == 200) {
+        alertMap = jsonDecode(alertRes.body) as Map<String, dynamic>;
+      }
+
+      if (includeDiagnostics) {
+        const endpoint = '$_baseUrl/api/demo/pricing-quote';
+        final payload = {'userId': userId, 'city': city};
+        _log(
+          'PRICING_DEMO',
+          'REQUEST => POST $endpoint payload=${jsonEncode(payload)}',
+        );
+        final demoRes = await http.post(
+          Uri.parse(endpoint),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode(payload),
+        );
+        _log(
+          'PRICING_DEMO',
+          'RESPONSE <= ${demoRes.statusCode} body=${demoRes.body}',
+        );
+        if (demoRes.statusCode == 200) {
+          demoMap = jsonDecode(demoRes.body) as Map<String, dynamic>;
+        }
+      }
+
+      if (!mounted) return;
+      final engine = (healthMap?['engine'] as Map?)?.cast<String, dynamic>();
+      final engineResponse =
+          (quoteMap?['engineResponse'] as Map?)?.cast<String, dynamic>();
+      final topRiskFactors =
+          (engineResponse?['top_risk_factors'] as List?) ?? const [];
+      final demoPayload =
+          (demoMap?['mlPayload'] as Map?)?.cast<String, dynamic>();
+
+      setState(() {
+        if (quoteMap != null) {
+          userCity = (quoteMap['city'] ?? city).toString();
+          pricingBasePremium = quoteMap['basePremium'] ?? pricingBasePremium;
+          pricingFinalPremium = quoteMap['finalPremium'] ?? pricingFinalPremium;
+          pricingWRiskScore = quoteMap['wRiskScore'] ?? pricingWRiskScore;
+          pricingRAlertMultiplier =
+              quoteMap['rAlertMultiplier'] ?? pricingRAlertMultiplier;
+          pricingSource = (quoteMap['source'] ?? pricingSource).toString();
+          pricingCurrency = (quoteMap['currency'] ?? pricingCurrency).toString();
+          pricingTimestamp = (quoteMap['timestamp'] ?? pricingTimestamp)
+              .toString();
+          pricingEngineResponse = engineResponse;
+          pricingConfidence =
+              (engineResponse?['confidence'] ?? pricingConfidence).toString();
+          pricingTopRiskFactors = topRiskFactors;
+        }
+
+        if (alertMap != null) {
+          pricingZoneId = (alertMap['zone_id'] ?? pricingZoneId).toString();
+          pricingAlertSource =
+              (alertMap['alert_source'] ?? pricingAlertSource).toString();
+          pricingDiscountPct = alertMap['discount_pct'] ?? pricingDiscountPct;
+          pricingImdLevel = alertMap['imd_level'] ?? pricingImdLevel;
+          pricingMaxTemp = alertMap['max_temp'] ?? pricingMaxTemp;
+        }
+
+        if (engine != null) {
+          pricingEngineStatus =
+              (engine['status'] ?? pricingEngineStatus).toString();
+          pricingEngineReady = engine['ready'] == true;
+          pricingModelTrainedAt =
+              (engine['model_trained_at'] ?? pricingModelTrainedAt).toString();
+          pricingTrainingRows =
+              (engine['n_training_rows'] ?? pricingTrainingRows) as int;
+          pricingDriftThreshold =
+              engine['drift_threshold'] ?? pricingDriftThreshold;
+          pricingBaselineWRisk =
+              engine['baseline_w_risk'] ?? pricingBaselineWRisk;
+        }
+
+        pricingMlPayload = demoPayload;
+        pricingLoading = false;
+      });
+    } catch (e) {
+      _log('PRICING', 'EXCEPTION => $e');
+      if (!mounted) return;
+      setState(() => pricingLoading = false);
     }
   }
 
@@ -329,7 +531,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
     };
 
     const endpoint =
-        'https://vritti-6zip.onrender.com/api/v1/telemetry/heartbeat';
+        'https://vritti-ps1s.onrender.com/api/v1/telemetry/heartbeat';
     _log(
       'HEARTBEAT',
       'REQUEST => POST $endpoint payload=${jsonEncode(payload)}',
@@ -337,19 +539,19 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
 
     try {
       final res = await http.post(
-        Uri.parse(endpoint),
+        Uri.parse('$_baseUrl/api/v1/telemetry/heartbeat'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       );
       _log('HEARTBEAT', 'RESPONSE <= ${res.statusCode} body=${res.body}');
       if (res.statusCode == 200) {
-        final statusUrl =
-            'https://vritti-6zip.onrender.com/api/v1/user/heartbeat/$userId';
+        final statusUrl = '$_baseUrl/api/v1/user/heartbeat/$userId';
         final statusRes = await http.get(Uri.parse(statusUrl));
         _log(
           'HEARTBEAT_STATUS',
           'RESPONSE <= ${statusRes.statusCode} body=${statusRes.body}',
         );
+        await _fetchPricingBundle(includeDiagnostics: godModeEnabled);
       }
     } catch (e) {
       _log('HEARTBEAT', 'EXCEPTION => $e');
@@ -359,7 +561,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
   Future<void> _simulateWeek() async {
     setState(() => loadingWeek = true);
     final payload = {'userId': userId};
-    const endpoint = 'https://vritti-6zip.onrender.com/api/demo/simulate-week';
+    const endpoint = '$_baseUrl/api/demo/simulate-week';
     _log('SIMULATE_WEEK', 'REQUEST => POST $endpoint payload=$payload');
 
     try {
@@ -370,6 +572,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       );
       _log('SIMULATE_WEEK', 'RESPONSE <= ${res.statusCode} body=${res.body}');
       await _fetchDashboard();
+      await _fetchPricingBundle(includeDiagnostics: godModeEnabled);
       if (mounted && res.statusCode == 200) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Week simulation completed!')),
@@ -390,7 +593,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       'lat': snapshot.lat,
       'lng': snapshot.lng,
     };
-    const endpoint = 'https://vritti-6zip.onrender.com/api/v1/claims/trigger';
+    const endpoint = '$_baseUrl/api/v1/claims/trigger';
     _log('CLAIM_TRIGGER', 'REQUEST => POST $endpoint payload=$payload');
 
     try {
@@ -411,6 +614,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
         }
       }
       await _fetchDashboard();
+      await _fetchPricingBundle(includeDiagnostics: godModeEnabled);
     } catch (e) {
       _log('CLAIM_TRIGGER', 'EXCEPTION => $e');
     } finally {
@@ -465,6 +669,189 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
             style: const TextStyle(fontSize: 11, color: Colors.grey),
           ),
         ],
+      ),
+    );
+  }
+
+  Future<void> _promptGodMode() async {
+    var password = '';
+    final granted = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Enter God Mode Password'),
+          content: TextField(
+            obscureText: true,
+            decoration: const InputDecoration(labelText: 'Password'),
+            onChanged: (value) => password = value,
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(
+                  context,
+                  password.trim() == AppSecrets.godModePassword,
+                );
+              },
+              child: const Text('Unlock'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (!mounted || granted == null) return;
+    if (!granted) {
+      _showToast('Invalid god mode password', Colors.red);
+      return;
+    }
+    setState(() => godModeEnabled = true);
+    _showToast('God mode enabled', Colors.green);
+    await _fetchPricingBundle(includeDiagnostics: true);
+  }
+
+  Widget _buildPricingCard() {
+    final riskColor = pricingWRiskScore >= 0.75
+        ? Colors.red
+        : pricingWRiskScore >= 0.5
+        ? Colors.orange
+        : Colors.green;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.blue.withOpacity(0.18)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'Dynamic Pricing Quote',
+                style: GoogleFonts.outfit(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              if (pricingLoading)
+                const SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            '$pricingCurrency ${pricingFinalPremium.toStringAsFixed(0)}',
+            style: GoogleFonts.outfit(
+              fontSize: 30,
+              fontWeight: FontWeight.w800,
+              color: Colors.blue.shade700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Base: $pricingCurrency ${pricingBasePremium.toStringAsFixed(0)}  •  Source: $pricingSource  •  City: $userCity',
+            style: const TextStyle(color: Colors.black54),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              Chip(
+                label: Text('W-Risk ${pricingWRiskScore.toStringAsFixed(2)}'),
+                backgroundColor: riskColor.withOpacity(0.12),
+                labelStyle: TextStyle(color: riskColor),
+              ),
+              Chip(
+                label: Text(
+                  'R-Alert x${pricingRAlertMultiplier.toStringAsFixed(2)}',
+                ),
+                backgroundColor: Colors.blue.withOpacity(0.1),
+              ),
+              Chip(
+                label: Text('Discount ${pricingDiscountPct.toStringAsFixed(0)}%'),
+                backgroundColor: Colors.green.withOpacity(0.1),
+              ),
+              Chip(
+                label: Text(
+                  pricingEngineReady ? 'Engine Ready' : 'Engine Pending',
+                ),
+                backgroundColor: pricingEngineReady
+                    ? Colors.green.withOpacity(0.1)
+                    : Colors.orange.withOpacity(0.1),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Zone: $pricingZoneId  •  Alert source: $pricingAlertSource  •  Confidence: $pricingConfidence',
+            style: const TextStyle(color: Colors.black54),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPricingDiagnostics() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: DefaultTextStyle(
+        style: const TextStyle(
+          color: Colors.greenAccent,
+          fontFamily: 'monospace',
+          fontSize: 12,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('PRICING GOD MODE DIAGNOSTICS'),
+            const SizedBox(height: 8),
+            Text('engineStatus: $pricingEngineStatus'),
+            Text('engineReady: $pricingEngineReady'),
+            Text('modelTrainedAt: $pricingModelTrainedAt'),
+            Text('trainingRows: $pricingTrainingRows'),
+            Text('driftThreshold: ${pricingDriftThreshold.toString()}'),
+            Text('baselineWRisk: ${pricingBaselineWRisk.toString()}'),
+            Text('rAlertMultiplier: ${pricingRAlertMultiplier.toString()}'),
+            Text('imdLevel: ${pricingImdLevel.toString()}'),
+            Text('maxTemp: ${pricingMaxTemp.toString()}'),
+            Text('quoteTimestamp: $pricingTimestamp'),
+            const Divider(color: Colors.white24, height: 24),
+            const Text('Top Risk Factors'),
+            const SizedBox(height: 6),
+            if (pricingTopRiskFactors.isEmpty)
+              const Text('No risk-factor breakdown returned.')
+            else
+              ...pricingTopRiskFactors.take(4).map((factor) {
+                final map = Map<String, dynamic>.from(factor as Map);
+                return Text(
+                  '- ${map['factor']}: ${map['score']}',
+                );
+              }),
+            if (pricingMlPayload != null) ...[
+              const Divider(color: Colors.white24, height: 24),
+              const Text('ML Payload'),
+              const SizedBox(height: 6),
+              Text(_prettyJson(pricingMlPayload)),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -536,6 +923,13 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
         title: Text('Vritti Demo Console — $userName'),
         actions: [
           IconButton(
+            onPressed: godModeEnabled ? null : _promptGodMode,
+            icon: Icon(
+              godModeEnabled ? Iconsax.eye : Iconsax.lock,
+              color: godModeEnabled ? Colors.green : null,
+            ),
+          ),
+          IconButton(
             onPressed: () async {
               final prefs = await SharedPreferences.getInstance();
               await prefs.clear();
@@ -582,52 +976,59 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
               currentStatus,
               currentStatus == 'FRAUD_FLAG' ? Colors.red : Colors.green,
             ),
-            const SizedBox(height: 14),
-            _buildSensorTransparencyDiv(),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: loadingWeek ? null : _simulateWeek,
-                    icon: loadingWeek
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Iconsax.flash_1),
-                    label: Text(
-                      loadingWeek ? 'Simulating...' : 'Simulate Week',
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(58),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: loadingClaim ? null : _triggerClaim,
-                    icon: loadingClaim
-                        ? const SizedBox(
-                            height: 18,
-                            width: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Iconsax.warning_2),
-                    label: Text(
-                      loadingClaim ? 'Triggering...' : 'Disruption Trigger',
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(58),
-                      backgroundColor: Colors.red.shade400,
-                      foregroundColor: Colors.white,
+            _buildPricingCard(),
+            const SizedBox(height: 16),
+            if (godModeEnabled) ...[
+              _buildSensorTransparencyDiv(),
+              const SizedBox(height: 16),
+              _buildPricingDiagnostics(),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: loadingWeek ? null : _simulateWeek,
+                      icon: loadingWeek
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Iconsax.flash_1),
+                      label: Text(
+                        loadingWeek ? 'Simulating...' : 'Simulate Week',
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(58),
+                      ),
                     ),
                   ),
-                ),
-              ],
-            ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: loadingClaim ? null : _triggerClaim,
+                      icon: loadingClaim
+                          ? const SizedBox(
+                              height: 18,
+                              width: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Iconsax.warning_2),
+                      label: Text(
+                        loadingClaim ? 'Triggering...' : 'Disruption Trigger',
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(58),
+                        backgroundColor: Colors.red.shade400,
+                        foregroundColor: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+            ],
             const SizedBox(height: 16),
             Text(
               'Notifications',
@@ -643,103 +1044,43 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
               ...notifications.whereType<Map>().map(
                 (e) => _notificationCard(Map<String, dynamic>.from(e)),
               ),
-            const SizedBox(height: 16),
-            Text(
-              'Terminal Log Stream',
-              style: GoogleFonts.outfit(
-                fontSize: 22,
-                fontWeight: FontWeight.w700,
+            if (godModeEnabled) ...[
+              const SizedBox(height: 16),
+              Text(
+                'Terminal Log Stream',
+                style: GoogleFonts.outfit(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Container(
-              constraints: const BoxConstraints(minHeight: 220),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.black,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: terminalLogs
-                    .map(
-                      (l) => Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Text(
-                          l,
-                          style: const TextStyle(
-                            color: Colors.greenAccent,
-                            fontFamily: 'monospace',
-                            fontSize: 11,
+              const SizedBox(height: 8),
+              Container(
+                constraints: const BoxConstraints(minHeight: 220),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.black,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: terminalLogs
+                      .map(
+                        (l) => Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            l,
+                            style: const TextStyle(
+                              color: Colors.greenAccent,
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                            ),
                           ),
                         ),
-                      ),
-                    )
-                    .toList(),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-// TERMINAL VIEW WIDGET
-// ---------------------------------------------------------------------------
-
-class _TerminalView extends StatelessWidget {
-  final List<dynamic> steps;
-  const _TerminalView({required this.steps});
-
-  @override
-  Widget build(BuildContext context) {
-    return FadeInUp(
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.black,
-          borderRadius: BorderRadius.circular(24),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'VERIFICATION TERMINAL',
-              style: TextStyle(
-                color: Colors.green,
-                fontFamily: 'monospace',
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
-              ),
-            ),
-            const SizedBox(height: 12),
-            if (steps.isEmpty)
-              const Text(
-                '> Handshaking with Vritti-Core...',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
+                      )
+                      .toList(),
                 ),
               ),
-            ...steps.map(
-              (s) => Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: Text(
-                  '> [${s['timestamp'] ?? 'NO_TS'}] ${s['label']}: ${s['status'] == 'pass' ? '✓' : '✗'}\n  ${s['detail']}',
-                  style: TextStyle(
-                    color: s['status'] == 'pass'
-                        ? Colors.greenAccent
-                        : Colors.redAccent,
-                    fontFamily: 'monospace',
-                    fontSize: 11,
-                  ),
-                ),
-              ),
-            ),
+            ],
           ],
         ),
       ),
