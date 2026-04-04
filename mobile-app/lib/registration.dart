@@ -7,7 +7,6 @@ import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 String _regTs() => DateTime.now().toIso8601String();
-String _regTimestamp() => DateTime.now().toIso8601String();
 
 dynamic _regTryDecodeJson(String body) {
   try {
@@ -92,7 +91,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
     final payload = {
       'phone': _phoneController.text.trim(),
-      'code': _codeController.text.trim(),
+      'otp': _codeController.text.trim(),
       'name': _nameController.text.trim(),
       'city': _cityController.text.trim(),
       'platform': _platform,
@@ -129,7 +128,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           Navigator.pushReplacementNamed(context, '/main');
         }
       } else {
-        _toast('OTP verification failed');
+        final decoded = _regTryDecodeJson(res.body);
+        final errMsg =
+            (decoded is Map ? decoded['error'] : null) ??
+            'OTP verification failed';
+        _toast(errMsg.toString());
       }
     } catch (e) {
       _log('EXCEPTION => $e');
@@ -154,30 +157,44 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         children: [
           Text(
             'Sign Up for Vritti',
-            style: GoogleFonts.outfit(fontSize: 30, fontWeight: FontWeight.w800),
+            style: GoogleFonts.outfit(
+              fontSize: 30,
+              fontWeight: FontWeight.w800,
+            ),
           ),
           const SizedBox(height: 20),
           TextField(
             controller: _nameController,
-            decoration: const InputDecoration(labelText: 'Name', prefixIcon: Icon(Iconsax.user)),
+            decoration: const InputDecoration(
+              labelText: 'Name',
+              prefixIcon: Icon(Iconsax.user),
+            ),
           ),
           const SizedBox(height: 10),
           TextField(
             controller: _phoneController,
             keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(labelText: 'Phone', prefixIcon: Icon(Iconsax.mobile)),
+            decoration: const InputDecoration(
+              labelText: 'Phone',
+              prefixIcon: Icon(Iconsax.mobile),
+            ),
           ),
           const SizedBox(height: 10),
           TextField(
             controller: _cityController,
-            decoration: const InputDecoration(labelText: 'City', prefixIcon: Icon(Iconsax.location)),
+            decoration: const InputDecoration(
+              labelText: 'City',
+              prefixIcon: Icon(Iconsax.location),
+            ),
           ),
           const SizedBox(height: 10),
           DropdownButtonFormField<String>(
             value: _platform,
-            items: const ['Swiggy', 'Zomato', 'Uber']
-                .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-                .toList(),
+            items: const [
+              'Swiggy',
+              'Zomato',
+              'Uber',
+            ].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
             onChanged: (v) => setState(() => _platform = v ?? _platform),
             decoration: const InputDecoration(
               labelText: 'Platform',
@@ -187,7 +204,9 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           const SizedBox(height: 10),
           CheckboxListTile(
             value: _consentGiven,
-            title: const Text('I consent to background telemetry for payout verification'),
+            title: const Text(
+              'I consent to background telemetry for payout verification',
+            ),
             onChanged: (v) => setState(() => _consentGiven = v ?? false),
           ),
           const SizedBox(height: 16),

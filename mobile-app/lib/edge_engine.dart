@@ -7,6 +7,10 @@ import 'package:sensors_plus/sensors_plus.dart';
 
 String _ts() => DateTime.now().toIso8601String();
 
+// ---------------------------------------------------------------------------
+// DATA MODEL
+// ---------------------------------------------------------------------------
+
 class EdgeSnapshot {
   final double ax;
   final double ay;
@@ -80,7 +84,10 @@ class EdgeSnapshot {
     );
   }
 }
-String _edgeTs() => DateTime.now().toIso8601String();
+
+// ---------------------------------------------------------------------------
+// ENGINE
+// ---------------------------------------------------------------------------
 
 class EdgeEngine {
   static final ValueNotifier<EdgeSnapshot> liveSnapshot = ValueNotifier(
@@ -101,11 +108,19 @@ class EdgeEngine {
   static double _lat = 0;
   static double _lng = 0;
 
+  static double _currentGyroEnergy = 0;
+  static double _totalDistance = 0;
+  static Position? _lastPosition;
+
   static final List<double> _vibrationBuffer = [];
   static final List<double> _speedBuffer = [];
 
+  // -------------------------------------------------------------------------
+  // INIT
+  // -------------------------------------------------------------------------
+
   static Future<void> init() async {
-    debugPrint('[${_ts()}] [EDGE] init() called. Starting accelerometer, gyro, GPS listeners');
+    debugPrint('[${_ts()}] [EDGE_ENGINE] Initializing sensor streams...');
 
     _accelSub?.cancel();
     _gyroSub?.cancel();
@@ -117,14 +132,6 @@ class EdgeEngine {
       _az = e.z;
       final vib = sqrt((e.x * e.x) + (e.y * e.y) + (e.z * e.z));
       _vibrationBuffer.add(vib);
-    debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Initializing sensor streams...");
-    // 1. Accelerometer Stream for Engine/Road Vibration (Physical Truth)
-    _accelSub = userAccelerometerEvents.listen((event) {
-      double magnitude = sqrt(
-        pow(event.x, 2) + pow(event.y, 2) + pow(event.z, 2),
-      );
-      _vibrationBuffer.add(magnitude);
-      // Maintain 2 minutes of historical data (at ~1Hz) for the correlation window
       if (_vibrationBuffer.length > 120) _vibrationBuffer.removeAt(0);
       _publishSnapshot();
     });
@@ -133,51 +140,62 @@ class EdgeEngine {
       _gx = e.x;
       _gy = e.y;
       _gz = e.z;
+      _currentGyroEnergy = sqrt((e.x * e.x) + (e.y * e.y) + (e.z * e.z));
       _publishSnapshot();
     });
 
     final hasPermission = await _ensureLocationPermission();
     if (hasPermission) {
-      _gpsSub = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.best),
-      ).listen((pos) {
-        _lat = pos.latitude;
-        _lng = pos.longitude;
-        _speedKmph = max(0, pos.speed * 3.6);
-        _speedBuffer.add(_speedKmph);
-        if (_speedBuffer.length > 120) _speedBuffer.removeAt(0);
-        _publishSnapshot(isMocked: pos.isMocked);
-      });
+      _gpsSub =
+          Geolocator.getPositionStream(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.best,
+            ),
+          ).listen((pos) {
+            _lat = pos.latitude;
+            _lng = pos.longitude;
+            _speedKmph = max(0, pos.speed * 3.6);
+            _speedBuffer.add(_speedKmph);
+            if (_speedBuffer.length > 120) _speedBuffer.removeAt(0);
+            _publishSnapshot(isMocked: pos.isMocked);
+          });
     } else {
-      debugPrint('[${_ts()}] [EDGE] Location permission denied. GPS data unavailable.');
+      debugPrint(
+        '[${_ts()}] [EDGE_ENGINE] Location permission denied. GPS data unavailable.',
+      );
     }
-  }
 
-  static Future<bool> _ensureLocationPermission() async {
-    final enabled = await Geolocator.isLocationServiceEnabled();
-    if (!enabled) return false;
-    var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
-  }
-
-  static Future<bool> _ensureLocationPermission() async {
-    final enabled = await Geolocator.isLocationServiceEnabled();
-    if (!enabled) return false;
-    var perm = await Geolocator.checkPermission();
-    if (perm == LocationPermission.denied) {
-      perm = await Geolocator.requestPermission();
     debugPrint(
-      "[${_edgeTs()}] [EDGE_ENGINE] Sensor streams active. Buffers => vibration:${_vibrationBuffer.length}, speed:${_speedBuffer.length}",
+      '[${_ts()}] [EDGE_ENGINE] Sensor streams active. '
+      'Buffers => vibration:${_vibrationBuffer.length}, speed:${_speedBuffer.length}',
     );
   }
 
-  /// Runs the statistical inference model to detect Fraud (e.g., GPS Spoofing)
-  /// Called by main.dart every 30 seconds for heartbeat and batch sync
+  // -------------------------------------------------------------------------
+  // LOCATION PERMISSION
+  // -------------------------------------------------------------------------
+
+  static Future<bool> _ensureLocationPermission() async {
+    final enabled = await Geolocator.isLocationServiceEnabled();
+    if (!enabled) return false;
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
+    }
+    return perm == LocationPermission.whileInUse ||
+        perm == LocationPermission.always;
+  }
+
+  // -------------------------------------------------------------------------
+  // INFERENCE
+  // -------------------------------------------------------------------------
+
+  /// Runs the statistical inference model to detect fraud (e.g. GPS spoofing).
+  /// Called by main.dart every 30 seconds for heartbeat and batch sync.
   static Future<Map<String, dynamic>> runInference() async {
     try {
-      debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Running inference cycle...");
-      Position pos = await Geolocator.getCurrentPosition(
+      debugPrint('[${_ts()}] [EDGE_ENGINE] Running inference cycle...');
+      final pos = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.high,
         timeLimit: const Duration(seconds: 4),
       );
@@ -193,68 +211,68 @@ class EdgeEngine {
       }
       _lastPosition = pos;
 
-      double currentSpeed = pos.speed * 3.6; // Convert m/s to km/h
+      final currentSpeed = pos.speed * 3.6; // m/s → km/h
       _speedBuffer.add(currentSpeed);
       if (_speedBuffer.length > 120) _speedBuffer.removeAt(0);
 
-      // --- STATISTICAL CORE: PEARSON CORRELATION (r) ---
-      // This proves that GPS speed changes are physically syncronized with device vibration.
-      // A desktop phone with "spoofed" GPS will have a correlation near 0.
-      double correlation = _calculatePearsonCorrelation(
-        _speedBuffer,
-        _vibrationBuffer,
-      );
+      // --- STATISTICAL CORE: PEARSON CORRELATION ---
+      // Proves GPS speed changes are physically synchronised with device vibration.
+      // A desktop phone with spoofed GPS will have correlation near 0.
+      final correlation = _pearson(_speedBuffer, _vibrationBuffer);
 
       // --- MULTIMODAL DECISION MATRIX ---
       bool isSecure = !pos.isMocked; // Hardware-level spoof check
 
-      // If the vehicle is moving (> 5km/h), verify the physical dynamics
+      // If the vehicle is moving (>5 km/h), verify the physical dynamics.
       if (currentSpeed > 5) {
-        // High Speed + Zero Correlation = Fraud
-        // High Speed + Zero Gyro (moving in a perfectly straight line forever) = Likely Emulation
+        // High speed + zero correlation  = Fraud
+        // High speed + zero gyro         = Likely emulation
         isSecure = correlation > 0.35 && _currentGyroEnergy > 0.02;
       }
 
       debugPrint(
-        "[${_edgeTs()}] [EDGE_ENGINE] Inference Result => {"
-        "correlation:${correlation.toStringAsFixed(3)}, "
-        "gyroEnergy:${_currentGyroEnergy.toStringAsFixed(3)}, "
-        "speedKmH:${currentSpeed.toStringAsFixed(2)}, "
-        "distanceKm:${(_totalDistance / 1000).toStringAsFixed(3)}, "
-        "isSecure:$isSecure, "
-        "isMocked:${pos.isMocked}"
-        "}",
+        '[${_ts()}] [EDGE_ENGINE] Inference Result => {'
+        'correlation:${correlation.toStringAsFixed(3)}, '
+        'gyroEnergy:${_currentGyroEnergy.toStringAsFixed(3)}, '
+        'speedKmH:${currentSpeed.toStringAsFixed(2)}, '
+        'distanceKm:${(_totalDistance / 1000).toStringAsFixed(3)}, '
+        'isSecure:$isSecure, '
+        'isMocked:${pos.isMocked}'
+        '}',
       );
 
       final payload = {
-        "isSecure": isSecure,
-        "maeScore": correlation.clamp(
-          0.0,
-          1.0,
-        ), // Maps the correlation to the backend's integrity metric
-        "distance": _totalDistance / 1000, // Convert to KM
-        "speed": currentSpeed,
+        'isSecure': isSecure,
+        'maeScore': correlation.clamp(0.0, 1.0),
+        'distance': _totalDistance / 1000,
+        'speed': currentSpeed,
       };
-      debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Payload => $payload");
+      debugPrint('[${_ts()}] [EDGE_ENGINE] Payload => $payload');
       return payload;
     } catch (e) {
-      debugPrint("[${_edgeTs()}] [EDGE_ENGINE] Inference failed => $e");
+      debugPrint('[${_ts()}] [EDGE_ENGINE] Inference failed => $e');
       return {
-        "isSecure": false,
-        "maeScore": 0.0,
-        "distance": _totalDistance / 1000,
-        "speed": 0.0,
+        'isSecure': false,
+        'maeScore': 0.0,
+        'distance': _totalDistance / 1000,
+        'speed': 0.0,
       };
     }
-    return perm == LocationPermission.whileInUse ||
-        perm == LocationPermission.always;
   }
+
+  // -------------------------------------------------------------------------
+  // SNAPSHOT PUBLISHER
+  // -------------------------------------------------------------------------
 
   static void _publishSnapshot({bool isMocked = false}) {
     final vib = sqrt((_ax * _ax) + (_ay * _ay) + (_az * _az));
     final gyroMag = sqrt((_gx * _gx) + (_gy * _gy) + (_gz * _gz));
-    final correlation = _pearson(_speedBuffer, _vibrationBuffer).clamp(0.0, 1.0);
-    final flagged = isMocked || (_speedKmph > 5 && (correlation < 0.35 || gyroMag < 0.02));
+    final correlation = _pearson(
+      _speedBuffer,
+      _vibrationBuffer,
+    ).clamp(0.0, 1.0);
+    final flagged =
+        isMocked || (_speedKmph > 5 && (correlation < 0.35 || gyroMag < 0.02));
 
     final interpretation = flagged
         ? 'Potential mismatch detected (FRAUD_FLAG): speed/vibration/gyro pattern is inconsistent.'
@@ -277,9 +295,11 @@ class EdgeEngine {
       locationName: _lat == 0 && _lng == 0
           ? 'Location pending'
           : 'Approx @ ${_lat.toStringAsFixed(4)}, ${_lng.toStringAsFixed(4)}',
-      hardwareGpsSummary: 'GPS speed=${_speedKmph.toStringAsFixed(2)}km/h, mocked=$isMocked',
+      hardwareGpsSummary:
+          'GPS speed=${_speedKmph.toStringAsFixed(2)}km/h, mocked=$isMocked',
       cellTowerId: 'UNAVAILABLE_DEMO',
-      cellTowerName: 'Cell-tower scan not exposed by current Flutter plugin set',
+      cellTowerName:
+          'Cell-tower scan not exposed by current Flutter plugin set',
       wifiBssid: 'UNAVAILABLE_DEMO',
       wifiName: 'Wi-Fi BSSID scan not exposed by current Flutter plugin set',
       interpretation: interpretation,
@@ -287,37 +307,9 @@ class EdgeEngine {
     );
   }
 
-
-    final interpretation = flagged
-        ? 'Potential mismatch detected (FRAUD_FLAG): speed/vibration/gyro pattern is inconsistent.'
-        : 'Telemetry consistent (VERIFIED): speed and inertial signals are aligned.';
-
-    liveSnapshot.value = EdgeSnapshot(
-      ax: _ax,
-      ay: _ay,
-      az: _az,
-      gx: _gx,
-      gy: _gy,
-      gz: _gz,
-      vibrationMagnitude: vib,
-      gyroMagnitude: gyroMag,
-      speedKmph: _speedKmph,
-      maeScore: correlation,
-      isFraudFlag: flagged,
-      lat: _lat,
-      lng: _lng,
-      locationName: _lat == 0 && _lng == 0
-          ? 'Location pending'
-          : 'Approx @ ${_lat.toStringAsFixed(4)}, ${_lng.toStringAsFixed(4)}',
-      hardwareGpsSummary: 'GPS speed=${_speedKmph.toStringAsFixed(2)}km/h, mocked=$isMocked',
-      cellTowerId: 'UNAVAILABLE_DEMO',
-      cellTowerName: 'Cell-tower scan not exposed by current Flutter plugin set',
-      wifiBssid: 'UNAVAILABLE_DEMO',
-      wifiName: 'Wi-Fi BSSID scan not exposed by current Flutter plugin set',
-      interpretation: interpretation,
-      timestamp: DateTime.now(),
-    );
-  }
+  // -------------------------------------------------------------------------
+  // PEARSON CORRELATION
+  // -------------------------------------------------------------------------
 
   static double _pearson(List<double> x, List<double> y) {
     if (x.length < 10 || y.length < 10) return 0.85;
@@ -339,6 +331,10 @@ class EdgeEngine {
     if (den == 0) return 0.0;
     return num / den;
   }
+
+  // -------------------------------------------------------------------------
+  // PUBLIC API
+  // -------------------------------------------------------------------------
 
   static Future<EdgeSnapshot> collectSnapshot() async {
     return liveSnapshot.value;
