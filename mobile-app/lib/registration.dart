@@ -43,7 +43,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool _isBusy = false;
   final _codeController = TextEditingController();
 
-  static const _base = 'https://vritti-6zip.onrender.com';
+  static const _base = 'https://vritti-ps1s.onrender.com';
 
   void _log(String msg) => debugPrint('[${_regTs()}] [REGISTRATION] $msg');
 
