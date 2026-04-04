@@ -44,7 +44,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   bool _isBusy = false;
   final _codeController = TextEditingController();
 
-  static const _base = 'https://vritti-ps1s.onrender.com';
+  static const _base = 'https://vritti-6zip.onrender.com';
 
   void _log(String msg) => debugPrint('[${_regTs()}] [REGISTRATION] $msg');
 
@@ -64,24 +64,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         Uri.parse('$_base/api/v1/auth/request-otp'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
-    setState(() => isProcessing = true);
-    final url = 'https://vritti-ps1s.onrender.com/api/v1/auth/request-otp';
-    final payload = {"phone": phone};
-    debugPrint("[${_regTimestamp()}] [REG] Request => POST $url");
-    debugPrint("[${_regTimestamp()}] [REG] Payload => ${_regPrettyJson(payload)}");
-
-    try {
-      final res = await http.post(
-        Uri.parse(url),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(payload),
-      );
-      final decoded = _regTryDecodeJson(res.body);
-      debugPrint(
-        "[${_regTimestamp()}] [REG] Response <= status=${res.statusCode}",
-      );
-      debugPrint(
-        "[${_regTimestamp()}] [REG] Response Body <= ${_regPrettyJson(decoded ?? res.body)}",
       );
       _log('RESPONSE <= ${res.statusCode} body=${res.body}');
       if (res.statusCode == 200) {
@@ -93,8 +75,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     } catch (e) {
       _log('EXCEPTION => $e');
       _toast('Network error while requesting OTP');
-      debugPrint("[${_regTimestamp()}] [REG] Exception during request OTP => $e");
-      _showToast("Network Error", Colors.red);
     } finally {
       setState(() => _isBusy = false);
     }
@@ -121,44 +101,12 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
 
     setState(() => _isBusy = true);
     _log('REQUEST => POST /api/v1/auth/verify-otp payload=$payload');
-  // STEP 4: Final Verification & Consent
-  Future<void> _completeRegistration() async {
-    if (name.trim().isEmpty) {
-      _showToast("Name is required for Sign Up", Colors.orange);
-      return;
-    }
-    if (otp.trim().isEmpty) {
-      _showToast("Please enter OTP", Colors.orange);
-      return;
-    }
-    setState(() => isProcessing = true);
-    final url = 'https://vritti-ps1s.onrender.com/api/v1/auth/verify-otp';
-    final payload = {
-      "phone": phone,
-      "otp": otp,
-      "name": name.trim(),
-      "platform": selectedPlatform,
-      "city": workCity,
-      "consentGiven": true,
-    };
-    debugPrint("[${_regTimestamp()}] [REG] Request => POST $url");
-    debugPrint("[${_regTimestamp()}] [REG] Payload => ${_regPrettyJson(payload)}");
 
     try {
       final res = await http.post(
         Uri.parse('$_base/api/v1/auth/verify-otp'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
-        Uri.parse(url),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode(payload),
-      );
-      final data = _regTryDecodeJson(res.body);
-      debugPrint(
-        "[${_regTimestamp()}] [REG] Response <= status=${res.statusCode}",
-      );
-      debugPrint(
-        "[${_regTimestamp()}] [REG] Response Body <= ${_regPrettyJson(data ?? res.body)}",
       );
       _log('RESPONSE <= ${res.statusCode} body=${res.body}');
 
@@ -171,13 +119,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           _toast('User ID missing in response');
           return;
         }
-        final userData = data ?? jsonDecode(res.body);
-        final prefs = await SharedPreferences.getInstance();
-
-        await prefs.setString('user_id', userData['user']['id']);
-        await prefs.setString('user_name', userData['user']['name']);
-        await prefs.setString('user_phone', phone);
-        await prefs.setString('user_city', workCity);
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('user_id', userId.toString());
@@ -193,17 +134,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
     } catch (e) {
       _log('EXCEPTION => $e');
       _toast('Network error while verifying OTP');
-        final err = (data is Map<String, dynamic>) ? data['error'] : null;
-        _showToast(
-          err?.toString() ?? "Invalid OTP or Registration Failed",
-          Colors.red,
-        );
-      }
-    } catch (e) {
-      debugPrint(
-        "[${_regTimestamp()}] [REG] Exception during complete registration => $e",
-      );
-      _showToast("Connection failed", Colors.red);
     } finally {
       setState(() => _isBusy = false);
     }

@@ -159,6 +159,14 @@ class EdgeEngine {
     var perm = await Geolocator.checkPermission();
     if (perm == LocationPermission.denied) {
       perm = await Geolocator.requestPermission();
+  }
+
+  static Future<bool> _ensureLocationPermission() async {
+    final enabled = await Geolocator.isLocationServiceEnabled();
+    if (!enabled) return false;
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) {
+      perm = await Geolocator.requestPermission();
     debugPrint(
       "[${_edgeTs()}] [EDGE_ENGINE] Sensor streams active. Buffers => vibration:${_vibrationBuffer.length}, speed:${_speedBuffer.length}",
     );
@@ -247,6 +255,38 @@ class EdgeEngine {
     final gyroMag = sqrt((_gx * _gx) + (_gy * _gy) + (_gz * _gz));
     final correlation = _pearson(_speedBuffer, _vibrationBuffer).clamp(0.0, 1.0);
     final flagged = isMocked || (_speedKmph > 5 && (correlation < 0.35 || gyroMag < 0.02));
+
+    final interpretation = flagged
+        ? 'Potential mismatch detected (FRAUD_FLAG): speed/vibration/gyro pattern is inconsistent.'
+        : 'Telemetry consistent (VERIFIED): speed and inertial signals are aligned.';
+
+    liveSnapshot.value = EdgeSnapshot(
+      ax: _ax,
+      ay: _ay,
+      az: _az,
+      gx: _gx,
+      gy: _gy,
+      gz: _gz,
+      vibrationMagnitude: vib,
+      gyroMagnitude: gyroMag,
+      speedKmph: _speedKmph,
+      maeScore: correlation,
+      isFraudFlag: flagged,
+      lat: _lat,
+      lng: _lng,
+      locationName: _lat == 0 && _lng == 0
+          ? 'Location pending'
+          : 'Approx @ ${_lat.toStringAsFixed(4)}, ${_lng.toStringAsFixed(4)}',
+      hardwareGpsSummary: 'GPS speed=${_speedKmph.toStringAsFixed(2)}km/h, mocked=$isMocked',
+      cellTowerId: 'UNAVAILABLE_DEMO',
+      cellTowerName: 'Cell-tower scan not exposed by current Flutter plugin set',
+      wifiBssid: 'UNAVAILABLE_DEMO',
+      wifiName: 'Wi-Fi BSSID scan not exposed by current Flutter plugin set',
+      interpretation: interpretation,
+      timestamp: DateTime.now(),
+    );
+  }
+
 
     final interpretation = flagged
         ? 'Potential mismatch detected (FRAUD_FLAG): speed/vibration/gyro pattern is inconsistent.'

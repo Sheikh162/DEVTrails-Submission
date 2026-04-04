@@ -13,6 +13,9 @@ import 'registration.dart';
 
 String _ts() => DateTime.now().toIso8601String();
 
+
+String _ts() => DateTime.now().toIso8601String();
+
 String _timestampNow() => DateTime.now().toIso8601String();
 
 dynamic _tryDecodeJson(String body) {
@@ -88,6 +91,12 @@ class _LoginScreenState extends State<LoginScreen> {
     _log('REQUEST => POST /api/v1/auth/request-otp payload=$payload');
     try {
       final res = await http.post(
+        Uri.parse('https://vritti-6zip.onrender.com/api/v1/auth/request-otp'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+    try {
+      final res = await http.post(
         Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/request-otp'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
@@ -141,6 +150,18 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final res = await http.post(
+        Uri.parse('https://vritti-6zip.onrender.com/api/v1/auth/verify-otp'),
+
+  Future<void> _verifyOtp() async {
+    setState(() => _busy = true);
+    final payload = {
+      'phone': _phoneController.text.trim(),
+      'code': _codeController.text.trim(),
+    };
+    _log('REQUEST => POST /api/v1/auth/verify-otp payload=$payload');
+
+    try {
+      final res = await http.post(
         Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/verify-otp'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
@@ -153,6 +174,14 @@ class _LoginScreenState extends State<LoginScreen> {
         await prefs.setString('user_id', userId.toString());
         await prefs.setString('user_name', (map['name'] ?? 'Rider').toString());
         if (mounted) Navigator.pushReplacementNamed(context, '/main');
+      } else {
+        _toast('Verify failed');
+      }
+    } catch (e) {
+      _log('EXCEPTION => $e');
+      _toast('Network error');
+    } finally {
+      setState(() => _busy = false);
       } else {
         _toast('Verify failed');
       }
@@ -315,6 +344,23 @@ class _MainNavigationControllerState extends State<MainNavigationController> {
       _log('BOOT', 'No user session found. Redirecting to login.');
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
       return;
+  }
+
+  @override
+  void dispose() {
+    heartbeatTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _bootstrap() async {
+    final prefs = await SharedPreferences.getInstance();
+    userId = prefs.getString('user_id') ?? '';
+    userName = prefs.getString('user_name') ?? 'Rider';
+    _log('BOOT', 'Loaded session userId=$userId userName=$userName');
+    if (userId.isEmpty) {
+      _log('BOOT', 'No user session found. Redirecting to login.');
+      if (mounted) Navigator.pushReplacementNamed(context, '/login');
+      return;
     debugPrint("[${_timestampNow()}] [APP] MainNavigationController initialized.");
     _initUserSession();
     _startSensorStreams();
@@ -369,6 +415,8 @@ class _MainNavigationControllerState extends State<MainNavigationController> {
     } catch (e) {
       debugPrint("[${_timestampNow()}] [DASHBOARD] Exception => $e");
     }
+    await _fetchDashboard();
+    _startTelemetryLoop();
   }
 
   Future<void> _refreshUserProfile() async {
@@ -409,6 +457,75 @@ class _MainNavigationControllerState extends State<MainNavigationController> {
       await _sendHeartbeat();
     });
     _log('TELEMETRY', 'Started 1-second heartbeat loop for demo mode.');
+  }
+
+  Future<void> _fetchDashboard() async {
+    final url = 'https://vritti-6zip.onrender.com/api/v1/user/dashboard/$userId';
+    _log('DASHBOARD', 'REQUEST => GET $url');
+    try {
+      final res = await http.get(Uri.parse(url));
+      _log('DASHBOARD', 'RESPONSE <= ${res.statusCode} body=${res.body}');
+      if (res.statusCode != 200) return;
+      final map = jsonDecode(res.body) as Map<String, dynamic>;
+      setState(() {
+        premiumInvested = map['premiumInvested'] ?? map['moneyInvested'] ?? 0;
+        weeklyEarnings = map['weeklyEarnings'] ?? 0;
+        walletBalance = map['walletBalance'] ?? map['currentBalance'] ?? 0;
+        currentStatus = map['currentStatus']?.toString() ?? 'UNKNOWN';
+        notifications = (map['notifications'] as List?) ?? [];
+      });
+    } catch (e) {
+      _log('DASHBOARD', 'EXCEPTION => $e');
+    }
+  }
+
+  Future<void> _sendHeartbeat() async {
+    if (userId.isEmpty) return;
+
+    final snapshot = await EdgeEngine.collectSnapshot();
+    final payload = {
+      'userId': userId,
+      'status': snapshot.isFraudFlag ? 'FRAUD_FLAG' : 'VERIFIED',
+      'lat': snapshot.lat,
+      'lng': snapshot.lng,
+      'speed': snapshot.speedKmph,
+      'maeScore': snapshot.maeScore,
+      'sensors': {
+        'ax': snapshot.ax,
+        'ay': snapshot.ay,
+        'az': snapshot.az,
+        'gx': snapshot.gx,
+        'gy': snapshot.gy,
+        'gz': snapshot.gz,
+      },
+      'location': {'lat': snapshot.lat, 'lng': snapshot.lng},
+    };
+
+    const endpoint = 'https://vritti-6zip.onrender.com/api/v1/telemetry/heartbeat';
+    _log('HEARTBEAT', 'REQUEST => POST $endpoint payload=${jsonEncode(payload)}');
+
+    try {
+      final res = await http.post(
+        Uri.parse(endpoint),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      );
+      _log('HEARTBEAT', 'RESPONSE <= ${res.statusCode} body=${res.body}');
+      if (res.statusCode == 200) {
+        final statusUrl = 'https://vritti-6zip.onrender.com/api/v1/user/heartbeat/$userId';
+        final statusRes = await http.get(Uri.parse(statusUrl));
+        _log('HEARTBEAT_STATUS', 'RESPONSE <= ${statusRes.statusCode} body=${statusRes.body}');
+      }
+    } catch (e) {
+      _log('HEARTBEAT', 'EXCEPTION => $e');
+    }
+  }
+
+  Future<void> _simulateWeek() async {
+    setState(() => loadingWeek = true);
+    final payload = {'userId': userId};
+    const endpoint = 'https://vritti-6zip.onrender.com/api/demo/simulate-week';
+    _log('SIMULATE_WEEK', 'REQUEST => POST $endpoint payload=$payload');
   }
 
   Future<void> _fetchDashboard() async {
@@ -586,6 +703,16 @@ class _MainNavigationControllerState extends State<MainNavigationController> {
       }
     } catch (e) {
       _log('SIMULATE_WEEK', 'EXCEPTION => $e');
+      );
+      _log('SIMULATE_WEEK', 'RESPONSE <= ${res.statusCode} body=${res.body}');
+      await _fetchDashboard();
+      if (mounted && res.statusCode == 200) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Week simulation completed!')),
+        );
+      }
+    } catch (e) {
+      _log('SIMULATE_WEEK', 'EXCEPTION => $e');
         Uri.parse(url),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode(payload),
@@ -628,6 +755,7 @@ class _MainNavigationControllerState extends State<MainNavigationController> {
     setState(() => loadingClaim = true);
     final snapshot = await EdgeEngine.collectSnapshot();
     final payload = {'userId': userId, 'lat': snapshot.lat, 'lng': snapshot.lng};
+    const endpoint = 'https://vritti-6zip.onrender.com/api/v1/claims/trigger';
     const endpoint = 'https://vritti-ps1s.onrender.com/api/v1/claims/trigger';
     _log('CLAIM_TRIGGER', 'REQUEST => POST $endpoint payload=$payload');
 
