@@ -1,322 +1,200 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:animate_do/animate_do.dart';
-import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+String _regTs() => DateTime.now().toIso8601String();
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
+
   @override
   State<RegistrationScreen> createState() => _RegistrationScreenState();
 }
 
 class _RegistrationScreenState extends State<RegistrationScreen> {
-  final PageController _pageController = PageController();
-  int _currentStep = 0;
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _cityController = TextEditingController(text: 'Chennai');
+  String _platform = 'Swiggy';
+  bool _consentGiven = false;
 
-  // Data State
-  String name = "";
-  String phone = "";
-  String otp = "";
-  String selectedPlatform = "Swiggy";
-  String workCity = "Chennai";
-  bool isProcessing = false;
+  bool _otpRequested = false;
+  bool _isBusy = false;
+  final _codeController = TextEditingController();
 
-  void _nextPage() {
-    _pageController.nextPage(
-      duration: const Duration(milliseconds: 400),
-      curve: Curves.easeInOut,
-    );
-    setState(() => _currentStep++);
-  }
+  static const _base = 'https://vritti-6zip.onrender.com';
 
-  // STEP 1: Request OTP
-  Future<void> _requestOTP() async {
+  void _log(String msg) => debugPrint('[${_regTs()}] [REGISTRATION] $msg');
+
+  Future<void> _requestOtp() async {
+    final phone = _phoneController.text.trim();
     if (phone.length < 10) {
-      _showToast("Enter a valid phone number", Colors.orange);
+      _toast('Enter valid phone number');
       return;
     }
 
-    setState(() => isProcessing = true);
+    setState(() => _isBusy = true);
+    final payload = {'phone': phone};
+    _log('REQUEST => POST /api/v1/auth/request-otp payload=$payload');
 
     try {
       final res = await http.post(
-        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/request-otp'),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"phone": phone}),
+        Uri.parse('$_base/api/v1/auth/request-otp'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
       );
-
+      _log('RESPONSE <= ${res.statusCode} body=${res.body}');
       if (res.statusCode == 200) {
-        _nextPage();
+        setState(() => _otpRequested = true);
+        _toast('OTP sent');
       } else {
-        _showToast("Failed to send OTP", Colors.red);
+        _toast('OTP request failed');
       }
     } catch (e) {
-      _showToast("Network Error", Colors.red);
+      _log('EXCEPTION => $e');
+      _toast('Network error while requesting OTP');
     } finally {
-      setState(() => isProcessing = false);
+      setState(() => _isBusy = false);
     }
   }
 
-  // STEP 4: Final Verification & Consent
-  Future<void> _completeRegistration() async {
-    setState(() => isProcessing = true);
+  Future<void> _verifyAndSignup() async {
+    if (_nameController.text.trim().isEmpty) {
+      _toast('Name required');
+      return;
+    }
+    if (!_consentGiven) {
+      _toast('Consent is mandatory');
+      return;
+    }
+
+    final payload = {
+      'phone': _phoneController.text.trim(),
+      'code': _codeController.text.trim(),
+      'name': _nameController.text.trim(),
+      'city': _cityController.text.trim(),
+      'platform': _platform,
+      'consentGiven': true,
+    };
+
+    setState(() => _isBusy = true);
+    _log('REQUEST => POST /api/v1/auth/verify-otp payload=$payload');
 
     try {
-      // Backend production requirement: Sign Up requires all fields + consentGiven: true
       final res = await http.post(
-        Uri.parse('https://vritti-ps1s.onrender.com/api/v1/auth/verify-otp'),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "phone": phone,
-          "otp": otp,
-          "name": name,
-          "platform": selectedPlatform,
-          "city": workCity,
-          "consentGiven": true, // MANDATORY FOR WALLET CREATION
-        }),
+        Uri.parse('$_base/api/v1/auth/verify-otp'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
       );
+      _log('RESPONSE <= ${res.statusCode} body=${res.body}');
 
       if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
+        final map = jsonDecode(res.body);
+        final userId = map['userId'] ?? map['user']?['id'] ?? '';
+        final userName = map['name'] ?? map['user']?['name'] ?? 'Rider';
+
+        if (userId.toString().isEmpty) {
+          _toast('User ID missing in response');
+          return;
+        }
+
         final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('user_id', userId.toString());
+        await prefs.setString('user_name', userName.toString());
+        await prefs.setString('user_city', _cityController.text.trim());
 
-        await prefs.setString('user_id', data['user']['id']);
-        await prefs.setString('user_name', data['user']['name']);
-        await prefs.setString('user_phone', phone);
-        await prefs.setString('user_city', workCity);
-
-        if (mounted) Navigator.pushReplacementNamed(context, '/main');
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/main');
+        }
       } else {
-        _showToast("Invalid OTP or Registration Failed", Colors.red);
+        _toast('OTP verification failed');
       }
     } catch (e) {
-      _showToast("Connection failed", Colors.red);
+      _log('EXCEPTION => $e');
+      _toast('Network error while verifying OTP');
     } finally {
-      setState(() => isProcessing = false);
+      setState(() => _isBusy = false);
     }
   }
 
-  void _showToast(String m, Color c) {
+  void _toast(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(m),
-        backgroundColor: c,
-        behavior: SnackBarBehavior.floating,
-      ),
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF9FBF9),
-      body: SafeArea(
-        child: Column(
-          children: [
-            const SizedBox(height: 20),
-            _buildStepIndicator(),
-            Expanded(
-              child: PageView(
-                controller: _pageController,
-                physics: const NeverScrollableScrollPhysics(),
-                children: [
-                  _stepIdentity(),
-                  _stepOTP(),
-                  _stepWorkDetails(),
-                  _stepConsent(),
-                ],
+      appBar: AppBar(title: const Text('Create Account')),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          Text(
+            'Sign Up for Vritti',
+            style: GoogleFonts.outfit(fontSize: 30, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 20),
+          TextField(
+            controller: _nameController,
+            decoration: const InputDecoration(labelText: 'Name', prefixIcon: Icon(Iconsax.user)),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _phoneController,
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(labelText: 'Phone', prefixIcon: Icon(Iconsax.mobile)),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _cityController,
+            decoration: const InputDecoration(labelText: 'City', prefixIcon: Icon(Iconsax.location)),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            value: _platform,
+            items: const ['Swiggy', 'Zomato', 'Uber']
+                .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                .toList(),
+            onChanged: (v) => setState(() => _platform = v ?? _platform),
+            decoration: const InputDecoration(
+              labelText: 'Platform',
+              prefixIcon: Icon(Iconsax.briefcase),
+            ),
+          ),
+          const SizedBox(height: 10),
+          CheckboxListTile(
+            value: _consentGiven,
+            title: const Text('I consent to background telemetry for payout verification'),
+            onChanged: (v) => setState(() => _consentGiven = v ?? false),
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _isBusy ? null : _requestOtp,
+            child: Text(_otpRequested ? 'Resend OTP' : 'Request OTP'),
+          ),
+          if (_otpRequested) ...[
+            const SizedBox(height: 14),
+            TextField(
+              controller: _codeController,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'OTP Code',
+                prefixIcon: Icon(Iconsax.password_check),
               ),
             ),
+            const SizedBox(height: 14),
+            ElevatedButton(
+              onPressed: _isBusy ? null : _verifyAndSignup,
+              child: Text(_isBusy ? 'Please wait...' : 'Verify OTP & Continue'),
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
-
-  Widget _buildStepIndicator() => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 40),
-    child: Row(
-      children: List.generate(
-        4,
-        (i) => Expanded(
-          child: Container(
-            height: 4,
-            margin: const EdgeInsets.symmetric(horizontal: 4),
-            decoration: BoxDecoration(
-              color: _currentStep >= i
-                  ? const Color(0xFF006D32)
-                  : Colors.grey[300],
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
-
-  Widget _stepIdentity() => Padding(
-    padding: const EdgeInsets.all(32.0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        FadeInDown(
-          child: Text(
-            "Create your\nSafety Account",
-            style: GoogleFonts.outfit(
-              fontSize: 32,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-        const SizedBox(height: 40),
-        _field("Full Name", Iconsax.user, (v) => name = v),
-        const SizedBox(height: 20),
-        _field(
-          "Mobile Number",
-          Iconsax.mobile,
-          (v) => phone = v,
-          type: TextInputType.phone,
-        ),
-        const Spacer(),
-        _btn(isProcessing ? "Processing..." : "Verify Identity", _requestOTP),
-      ],
-    ),
-  );
-
-  Widget _stepOTP() => Padding(
-    padding: const EdgeInsets.all(32.0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          "Verify Phone",
-          style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 12),
-        Text(
-          "We've sent an OTP to $phone",
-          style: const TextStyle(color: Colors.grey),
-        ),
-        const SizedBox(height: 40),
-        _field(
-          "6-Digit Code",
-          Iconsax.password_check,
-          (v) => otp = v,
-          type: TextInputType.number,
-        ),
-        const Spacer(),
-        _btn("Confirm Code", _nextPage),
-      ],
-    ),
-  );
-
-  Widget _stepWorkDetails() => Padding(
-    padding: const EdgeInsets.all(32.0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          "Work Profile",
-          style: GoogleFonts.outfit(fontSize: 32, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 40),
-        _drop(
-          "Primary Platform",
-          selectedPlatform,
-          ["Swiggy", "Zomato", "Uber Eats"],
-          (v) => setState(() => selectedPlatform = v!),
-        ),
-        const SizedBox(height: 20),
-        _drop("Base City", workCity, [
-          "Chennai",
-          "Mumbai",
-          "Delhi",
-          "Bangalore",
-        ], (v) => setState(() => workCity = v!)),
-        const Spacer(),
-        _btn("Next: Legal Consent", _nextPage),
-      ],
-    ),
-  );
-
-  Widget _stepConsent() => Padding(
-    padding: const EdgeInsets.all(32.0),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        const Icon(Iconsax.shield_security, size: 80, color: Color(0xFF006D32)),
-        const SizedBox(height: 24),
-        Text(
-          "Rider Consent",
-          style: GoogleFonts.outfit(fontSize: 28, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 20),
-        const Text(
-          "To provide proof of income and verify parametric claims, Vritti requires background access to your sensors and location while you are on a shift. This data is encrypted and used only for payout verification.",
-          textAlign: TextAlign.center,
-          style: TextStyle(height: 1.5, color: Colors.grey),
-        ),
-        const Spacer(),
-        _btn(
-          isProcessing ? "Initialising Wallet..." : "I Agree & Finish",
-          _completeRegistration,
-        ),
-      ],
-    ),
-  );
-
-  Widget _field(
-    String h,
-    IconData i,
-    Function(String) o, {
-    TextInputType type = TextInputType.text,
-  }) => TextField(
-    onChanged: o,
-    keyboardType: type,
-    decoration: InputDecoration(
-      prefixIcon: Icon(i),
-      hintText: h,
-      filled: true,
-      fillColor: Colors.white,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(20),
-        borderSide: BorderSide.none,
-      ),
-    ),
-  );
-
-  Widget _drop(String l, String v, List<String> items, Function(String?) o) =>
-      DropdownButtonFormField<String>(
-        value: v,
-        decoration: InputDecoration(
-          labelText: l,
-          filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(20),
-            borderSide: BorderSide.none,
-          ),
-        ),
-        items: items
-            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
-            .toList(),
-        onChanged: o,
-      );
-
-  Widget _btn(String t, VoidCallback p) => SizedBox(
-    width: double.infinity,
-    height: 60,
-    child: ElevatedButton(
-      onPressed: p,
-      style: ElevatedButton.styleFrom(
-        backgroundColor: const Color(0xFF006D32),
-        foregroundColor: Colors.white,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      ),
-      child: Text(t, style: const TextStyle(fontWeight: FontWeight.bold)),
-    ),
-  );
 }
