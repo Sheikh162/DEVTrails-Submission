@@ -7,6 +7,24 @@ import 'package:iconsax_flutter/iconsax_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 String _regTs() => DateTime.now().toIso8601String();
+String _regTimestamp() => DateTime.now().toIso8601String();
+
+dynamic _regTryDecodeJson(String body) {
+  try {
+    return jsonDecode(body);
+  } catch (_) {
+    return null;
+  }
+}
+
+String _regPrettyJson(dynamic data) {
+  if (data == null) return 'null';
+  try {
+    return const JsonEncoder.withIndent('  ').convert(data);
+  } catch (_) {
+    return data.toString();
+  }
+}
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
