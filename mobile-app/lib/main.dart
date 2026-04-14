@@ -69,7 +69,15 @@ class VrittiApp extends StatelessWidget {
       title: 'Vritti',
       theme: ThemeData(
         useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF006D32)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF00421A), // Darker Green Scheme
+          primary: const Color(0xFF00421A),
+        ),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF00421A),
+          foregroundColor: Colors.white,
+          elevation: 0,
+        ),
         textTheme: GoogleFonts.outfitTextTheme(),
       ),
       initialRoute: '/login',
@@ -99,7 +107,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _otpSent = false;
   bool _busy = false;
 
-  void _log(String m) => debugPrint('[${_ts()}] [AUTH] $m');
+  void _log(String m) => debugPrint('[$_ts()] [AUTH] $m');
 
   void _toast(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -127,7 +135,10 @@ class _LoginScreenState extends State<LoginScreen> {
       if (res.statusCode == 200) {
         setState(() => _otpSent = true);
       } else {
-        _toast('OTP request failed');
+        final decoded = _tryDecodeJson(res.body);
+        final msg =
+            (decoded is Map ? decoded['error'] : null) ?? 'OTP request failed';
+        _toast(msg.toString());
       }
     } catch (e) {
       _log('EXCEPTION => $e');
@@ -142,6 +153,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final payload = {
       'phone': _phoneController.text.trim(),
       'otp': _codeController.text.trim(),
+      'consentGiven': true,
     };
     _log('REQUEST => POST /api/v1/auth/verify-otp payload=$payload');
 
@@ -163,7 +175,10 @@ class _LoginScreenState extends State<LoginScreen> {
         );
         if (mounted) Navigator.pushReplacementNamed(context, '/main');
       } else {
-        _toast('Verify failed');
+        final decoded = _tryDecodeJson(res.body);
+        final msg =
+            (decoded is Map ? decoded['error'] : null) ?? 'Verify failed';
+        _toast(msg.toString());
       }
     } catch (e) {
       _log('EXCEPTION => $e');
@@ -181,7 +196,7 @@ class _LoginScreenState extends State<LoginScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Iconsax.shield_tick, size: 80, color: Color(0xFF006D32)),
+            const Icon(Iconsax.shield_tick, size: 80, color: Color(0xFF00421A)),
             const SizedBox(height: 16),
             Text(
               'Vritti Login',
@@ -245,12 +260,14 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
   String userId = '';
   String userName = 'Rider';
   String userCity = 'Chennai';
+  String userPlatform = 'Swiggy';
 
   num premiumInvested = 0;
   num weeklyEarnings = 0;
   num walletBalance = 0;
   String currentStatus = 'UNKNOWN';
   List<dynamic> notifications = [];
+
   bool pricingLoading = false;
   num pricingBasePremium = 0;
   num pricingFinalPremium = 0;
@@ -283,7 +300,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
   bool godModeEnabled = false;
 
   void _log(String scope, String msg) {
-    final line = '[${_ts()}] [$scope] $msg';
+    final line = '[$_ts()] [$scope] $msg';
     debugPrint(line);
     if (!mounted) return;
     setState(() {
@@ -319,9 +336,13 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
     userId = prefs.getString('user_id') ?? '';
     userName = prefs.getString('user_name') ?? 'Rider';
     userCity = prefs.getString('user_city') ?? 'Chennai';
-    _log('BOOT', 'Loaded session userId=$userId userName=$userName');
+    userPlatform = prefs.getString('user_platform') ?? 'Swiggy';
+    _log(
+      'BOOT',
+      'userId=$userId userName=$userName city=$userCity platform=$userPlatform',
+    );
     if (userId.isEmpty) {
-      _log('BOOT', 'No user session found. Redirecting to login.');
+      _log('BOOT', 'No session. Redirecting to login.');
       if (mounted) Navigator.pushReplacementNamed(context, '/login');
       return;
     }
@@ -335,7 +356,10 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
     heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) async {
       await _sendHeartbeat();
     });
-    _log('TELEMETRY', 'Started 10-second heartbeat loop for demo mode.');
+    _log(
+      'TELEMETRY',
+      'Started ${_heartbeatInterval.inSeconds}s heartbeat loop.',
+    );
   }
 
   Future<void> _fetchDashboard() async {
@@ -346,6 +370,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       _log('DASHBOARD', 'RESPONSE <= ${res.statusCode} body=${res.body}');
       if (res.statusCode != 200) return;
       final map = jsonDecode(res.body) as Map<String, dynamic>;
+      if (!mounted) return;
       setState(() {
         premiumInvested = map['premiumInvested'] ?? map['moneyInvested'] ?? 0;
         weeklyEarnings = map['weeklyEarnings'] ?? 0;
@@ -360,7 +385,6 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
 
   Future<void> _fetchPricingBundle({required bool includeDiagnostics}) async {
     if (userId.isEmpty) return;
-
     setState(() => pricingLoading = true);
     final city = userCity.trim().isEmpty ? 'Chennai' : userCity.trim();
     final encodedCity = Uri.encodeComponent(city);
@@ -370,29 +394,18 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
         '$_baseUrl/api/v1/pricing/quote/$userId?city=$encodedCity',
       );
       final healthUri = Uri.parse('$_baseUrl/api/v1/pricing/health');
-      final alertUri = Uri.parse('$_baseUrl/api/v1/pricing/r-alert/$encodedCity');
+      final alertUri = Uri.parse(
+        '$_baseUrl/api/v1/pricing/r-alert/$encodedCity',
+      );
 
       _log('PRICING_QUOTE', 'REQUEST => GET $quoteUri');
       _log('PRICING_HEALTH', 'REQUEST => GET $healthUri');
       _log('PRICING_ALERT', 'REQUEST => GET $alertUri');
 
-      final quoteFuture = http.get(
-        quoteUri,
-        headers: {'Accept': 'application/json'},
-      );
-      final healthFuture = http.get(
-        healthUri,
-        headers: {'Accept': 'application/json'},
-      );
-      final alertFuture = http.get(
-        alertUri,
-        headers: {'Accept': 'application/json'},
-      );
-
       final responses = await Future.wait([
-        quoteFuture,
-        healthFuture,
-        alertFuture,
+        http.get(quoteUri, headers: {'Accept': 'application/json'}),
+        http.get(healthUri, headers: {'Accept': 'application/json'}),
+        http.get(alertUri, headers: {'Accept': 'application/json'}),
       ]);
 
       final quoteRes = responses[0];
@@ -428,14 +441,14 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       }
 
       if (includeDiagnostics) {
-        const endpoint = '$_baseUrl/api/demo/pricing-quote';
+        final demoEndpoint = '$_baseUrl/api/demo/pricing-quote';
         final payload = {'userId': userId, 'city': city};
         _log(
           'PRICING_DEMO',
-          'REQUEST => POST $endpoint payload=${jsonEncode(payload)}',
+          'REQUEST => POST $demoEndpoint payload=${jsonEncode(payload)}',
         );
         final demoRes = await http.post(
-          Uri.parse(endpoint),
+          Uri.parse(demoEndpoint),
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode(payload),
         );
@@ -450,12 +463,12 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
 
       if (!mounted) return;
       final engine = (healthMap?['engine'] as Map?)?.cast<String, dynamic>();
-      final engineResponse =
-          (quoteMap?['engineResponse'] as Map?)?.cast<String, dynamic>();
+      final engineResponse = (quoteMap?['engineResponse'] as Map?)
+          ?.cast<String, dynamic>();
       final topRiskFactors =
           (engineResponse?['top_risk_factors'] as List?) ?? const [];
-      final demoPayload =
-          (demoMap?['mlPayload'] as Map?)?.cast<String, dynamic>();
+      final demoPayload = (demoMap?['mlPayload'] as Map?)
+          ?.cast<String, dynamic>();
 
       setState(() {
         if (quoteMap != null) {
@@ -466,7 +479,8 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
           pricingRAlertMultiplier =
               quoteMap['rAlertMultiplier'] ?? pricingRAlertMultiplier;
           pricingSource = (quoteMap['source'] ?? pricingSource).toString();
-          pricingCurrency = (quoteMap['currency'] ?? pricingCurrency).toString();
+          pricingCurrency = (quoteMap['currency'] ?? pricingCurrency)
+              .toString();
           pricingTimestamp = (quoteMap['timestamp'] ?? pricingTimestamp)
               .toString();
           pricingEngineResponse = engineResponse;
@@ -474,19 +488,17 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
               (engineResponse?['confidence'] ?? pricingConfidence).toString();
           pricingTopRiskFactors = topRiskFactors;
         }
-
         if (alertMap != null) {
           pricingZoneId = (alertMap['zone_id'] ?? pricingZoneId).toString();
-          pricingAlertSource =
-              (alertMap['alert_source'] ?? pricingAlertSource).toString();
+          pricingAlertSource = (alertMap['alert_source'] ?? pricingAlertSource)
+              .toString();
           pricingDiscountPct = alertMap['discount_pct'] ?? pricingDiscountPct;
           pricingImdLevel = alertMap['imd_level'] ?? pricingImdLevel;
           pricingMaxTemp = alertMap['max_temp'] ?? pricingMaxTemp;
         }
-
         if (engine != null) {
-          pricingEngineStatus =
-              (engine['status'] ?? pricingEngineStatus).toString();
+          pricingEngineStatus = (engine['status'] ?? pricingEngineStatus)
+              .toString();
           pricingEngineReady = engine['ready'] == true;
           pricingModelTrainedAt =
               (engine['model_trained_at'] ?? pricingModelTrainedAt).toString();
@@ -497,7 +509,6 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
           pricingBaselineWRisk =
               engine['baseline_w_risk'] ?? pricingBaselineWRisk;
         }
-
         pricingMlPayload = demoPayload;
         pricingLoading = false;
       });
@@ -510,10 +521,13 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
 
   Future<void> _sendHeartbeat() async {
     if (userId.isEmpty) return;
-
     final snapshot = await EdgeEngine.collectSnapshot();
+
     final payload = {
       'userId': userId,
+      'rider_id': userId,
+      'delivery_platform': userPlatform,
+      'home_zone_id': userCity,
       'status': snapshot.isFraudFlag ? 'FRAUD_FLAG' : 'VERIFIED',
       'lat': snapshot.lat,
       'lng': snapshot.lng,
@@ -526,12 +540,38 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
         'gx': snapshot.gx,
         'gy': snapshot.gy,
         'gz': snapshot.gz,
+        'vibrationMagnitude': snapshot.vibrationMagnitude,
+        'gyroMagnitude': snapshot.gyroMagnitude,
       },
-      'location': {'lat': snapshot.lat, 'lng': snapshot.lng},
+      'location': {
+        'lat': snapshot.lat,
+        'lng': snapshot.lng,
+        'locationName': snapshot.locationName,
+        'speedKmph': snapshot.speedKmph,
+      },
+      'network': {
+        'carrierName': snapshot.carrierName,
+        'mcc': snapshot.mcc,
+        'mnc': snapshot.mnc,
+        'cellTowerId': snapshot.cellTowerId,
+        'wifiBssid': snapshot.wifiBssid,
+        'wifiName': snapshot.wifiName,
+      },
+      'pricingContext': {
+        'home_zone_id': userCity,
+        'delivery_platform': userPlatform,
+        'max_temp_forecast': snapshot.ambientTempC,
+        'rain_mm_7day_forecast': null,
+        'wind_gust_kmh_forecast': null,
+        'aqi_forecast_avg': null,
+        'imd_alert_level_forecast': null,
+        'bandh_probability_score': null,
+        'festival_calendar_flag': null,
+        'political_event_flag': null,
+      },
     };
 
-    const endpoint =
-        'https://vritti-ps1s.onrender.com/api/v1/telemetry/heartbeat';
+    final endpoint = '$_baseUrl/api/v1/telemetry/heartbeat';
     _log(
       'HEARTBEAT',
       'REQUEST => POST $endpoint payload=${jsonEncode(payload)}',
@@ -539,7 +579,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
 
     try {
       final res = await http.post(
-        Uri.parse('$_baseUrl/api/v1/telemetry/heartbeat'),
+        Uri.parse(endpoint),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode(payload),
       );
@@ -561,7 +601,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
   Future<void> _simulateWeek() async {
     setState(() => loadingWeek = true);
     final payload = {'userId': userId};
-    const endpoint = '$_baseUrl/api/demo/simulate-week';
+    final endpoint = '$_baseUrl/api/demo/simulate-week';
     _log('SIMULATE_WEEK', 'REQUEST => POST $endpoint payload=$payload');
 
     try {
@@ -573,15 +613,19 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       _log('SIMULATE_WEEK', 'RESPONSE <= ${res.statusCode} body=${res.body}');
       await _fetchDashboard();
       await _fetchPricingBundle(includeDiagnostics: godModeEnabled);
-      if (mounted && res.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Week simulation completed!')),
+      if (mounted) {
+        _showToast(
+          res.statusCode == 200
+              ? 'Week simulation completed!'
+              : 'Simulate returned ${res.statusCode}',
+          res.statusCode == 200 ? Colors.green : Colors.orange,
         );
       }
     } catch (e) {
       _log('SIMULATE_WEEK', 'EXCEPTION => $e');
+      if (mounted) _showToast('Simulate week failed', Colors.red);
     } finally {
-      setState(() => loadingWeek = false);
+      if (mounted) setState(() => loadingWeek = false);
     }
   }
 
@@ -593,7 +637,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
       'lat': snapshot.lat,
       'lng': snapshot.lng,
     };
-    const endpoint = '$_baseUrl/api/v1/claims/trigger';
+    final endpoint = '$_baseUrl/api/v1/claims/trigger';
     _log('CLAIM_TRIGGER', 'REQUEST => POST $endpoint payload=$payload');
 
     try {
@@ -618,9 +662,49 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
     } catch (e) {
       _log('CLAIM_TRIGGER', 'EXCEPTION => $e');
     } finally {
-      setState(() => loadingClaim = false);
+      if (mounted) setState(() => loadingClaim = false);
     }
   }
+
+  Future<void> _promptGodMode() async {
+    var password = '';
+    final granted = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Enter God Mode Password'),
+        content: TextField(
+          obscureText: true,
+          decoration: const InputDecoration(labelText: 'Password'),
+          onChanged: (value) => password = value,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(
+              context,
+              password.trim() == AppSecrets.godModePassword,
+            ),
+            child: const Text('Unlock'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || granted == null) return;
+    if (!granted) {
+      _showToast('Invalid god mode password', Colors.red);
+      return;
+    }
+    setState(() => godModeEnabled = true);
+    _showToast('God mode enabled', Colors.green);
+    await _fetchPricingBundle(includeDiagnostics: true);
+  }
+
+  // ---------------------------------------------------------------------------
+  // WIDGETS
+  // ---------------------------------------------------------------------------
 
   Widget _metricCard(String label, String value, Color color) {
     return Container(
@@ -671,47 +755,6 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
         ],
       ),
     );
-  }
-
-  Future<void> _promptGodMode() async {
-    var password = '';
-    final granted = await showDialog<bool>(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('Enter God Mode Password'),
-          content: TextField(
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'Password'),
-            onChanged: (value) => password = value,
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.pop(
-                  context,
-                  password.trim() == AppSecrets.godModePassword,
-                );
-              },
-              child: const Text('Unlock'),
-            ),
-          ],
-        );
-      },
-    );
-
-    if (!mounted || granted == null) return;
-    if (!granted) {
-      _showToast('Invalid god mode password', Colors.red);
-      return;
-    }
-    setState(() => godModeEnabled = true);
-    _showToast('God mode enabled', Colors.green);
-    await _fetchPricingBundle(includeDiagnostics: true);
   }
 
   Widget _buildPricingCard() {
@@ -780,7 +823,9 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
                 backgroundColor: Colors.blue.withOpacity(0.1),
               ),
               Chip(
-                label: Text('Discount ${pricingDiscountPct.toStringAsFixed(0)}%'),
+                label: Text(
+                  'Discount ${pricingDiscountPct.toStringAsFixed(0)}%',
+                ),
                 backgroundColor: Colors.green.withOpacity(0.1),
               ),
               Chip(
@@ -840,9 +885,7 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
             else
               ...pricingTopRiskFactors.take(4).map((factor) {
                 final map = Map<String, dynamic>.from(factor as Map);
-                return Text(
-                  '- ${map['factor']}: ${map['score']}',
-                );
+                return Text('- ${map['factor']}: ${map['score']}');
               }),
             if (pricingMlPayload != null) ...[
               const Divider(color: Colors.white24, height: 24),
@@ -897,11 +940,16 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
                 ),
                 Text('locationName: ${s.locationName}'),
                 Text('hardwareGps: ${s.hardwareGpsSummary}'),
-                Text('cellTowerId: ${s.cellTowerId}'),
-                Text('cellTowerName: ${s.cellTowerName}'),
-                Text('wifiBssid: ${s.wifiBssid}'),
-                Text('wifiName: ${s.wifiName}'),
-                const SizedBox(height: 6),
+                const Divider(color: Colors.white24, height: 16),
+                const Text('NETWORK CONTEXT'),
+                const SizedBox(height: 4),
+                Text('carrier: ${s.carrierName}'),
+                Text('mcc/mnc: ${s.mcc} / ${s.mnc}'),
+                // NOTE: Cell Tower ID and WiFi Fields have been removed
+                const Divider(color: Colors.white24, height: 16),
+                Text(
+                  'ambientTempC: ${s.ambientTempC?.toStringAsFixed(1) ?? 'unavailable'}',
+                ),
                 Text('interpretation: ${s.interpretation}'),
                 const Divider(color: Colors.white24, height: 32),
                 const Text(
@@ -920,13 +968,41 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Vritti Demo Console — $userName'),
+        title: Row(
+          children: [
+            const Icon(Iconsax.shield_tick, size: 28),
+            const SizedBox(width: 8),
+            Text(
+              'VRITTI',
+              style: GoogleFonts.outfit(
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.5,
+                fontSize: 22,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                userName,
+                style: GoogleFonts.outfit(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             onPressed: godModeEnabled ? null : _promptGodMode,
             icon: Icon(
               godModeEnabled ? Iconsax.eye : Iconsax.lock,
-              color: godModeEnabled ? Colors.green : null,
+              color: godModeEnabled ? Colors.greenAccent : Colors.white70,
             ),
           ),
           IconButton(
@@ -935,8 +1011,9 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
               await prefs.clear();
               if (mounted) Navigator.pushReplacementNamed(context, '/login');
             },
-            icon: const Icon(Iconsax.logout),
+            icon: const Icon(Iconsax.logout, color: Colors.white),
           ),
+          const SizedBox(width: 8),
         ],
       ),
       body: FadeIn(
@@ -1029,7 +1106,6 @@ class _DemoDashboardScreenState extends State<DemoDashboardScreen> {
               ),
               const SizedBox(height: 16),
             ],
-            const SizedBox(height: 16),
             Text(
               'Notifications',
               style: GoogleFonts.outfit(

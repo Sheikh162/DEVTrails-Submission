@@ -16,14 +16,38 @@ dynamic _regTryDecodeJson(String body) {
   }
 }
 
-String _regPrettyJson(dynamic data) {
-  if (data == null) return 'null';
-  try {
-    return const JsonEncoder.withIndent('  ').convert(data);
-  } catch (_) {
-    return data.toString();
-  }
-}
+// FIX 3: comprehensive list of Indian cities for the dropdown
+const List<String> _kIndiaCities = [
+  'Ahmedabad',
+  'Bengaluru',
+  'Bhopal',
+  'Chennai',
+  'Coimbatore',
+  'Delhi',
+  'Gurgaon',
+  'Hyderabad',
+  'Indore',
+  'Jaipur',
+  'Kochi',
+  'Kolkata',
+  'Lucknow',
+  'Mumbai',
+  'Nagpur',
+  'Noida',
+  'Patna',
+  'Pune',
+  'Surat',
+  'Visakhapatnam',
+];
+
+const List<String> _kPlatforms = [
+  'Swiggy',
+  'Zomato',
+  'Uber',
+  'Dunzo',
+  'Blinkit',
+  'Zepto',
+];
 
 class RegistrationScreen extends StatefulWidget {
   const RegistrationScreen({super.key});
@@ -35,13 +59,14 @@ class RegistrationScreen extends StatefulWidget {
 class _RegistrationScreenState extends State<RegistrationScreen> {
   final _nameController = TextEditingController();
   final _phoneController = TextEditingController();
-  final _cityController = TextEditingController(text: 'Chennai');
+  final _codeController = TextEditingController();
+
+  // FIX 3: city is now a dropdown selection, not a free-text field
+  String _city = 'Chennai';
   String _platform = 'Swiggy';
   bool _consentGiven = false;
-
   bool _otpRequested = false;
   bool _isBusy = false;
-  final _codeController = TextEditingController();
 
   static const _base = 'https://vritti-ps1s.onrender.com';
 
@@ -69,7 +94,10 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         setState(() => _otpRequested = true);
         _toast('OTP sent');
       } else {
-        _toast('OTP request failed');
+        final decoded = _regTryDecodeJson(res.body);
+        final msg =
+            (decoded is Map ? decoded['error'] : null) ?? 'OTP request failed';
+        _toast(msg.toString());
       }
     } catch (e) {
       _log('EXCEPTION => $e');
@@ -93,7 +121,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
       'phone': _phoneController.text.trim(),
       'otp': _codeController.text.trim(),
       'name': _nameController.text.trim(),
-      'city': _cityController.text.trim(),
+      'city': _city,
       'platform': _platform,
       'consentGiven': true,
     };
@@ -122,11 +150,11 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('user_id', userId.toString());
         await prefs.setString('user_name', userName.toString());
-        await prefs.setString('user_city', _cityController.text.trim());
+        // FIX 3: persist city and platform so dashboard can read them
+        await prefs.setString('user_city', _city);
+        await prefs.setString('user_platform', _platform);
 
-        if (mounted) {
-          Navigator.pushReplacementNamed(context, '/main');
-        }
+        if (mounted) Navigator.pushReplacementNamed(context, '/main');
       } else {
         final decoded = _regTryDecodeJson(res.body);
         final errMsg =
@@ -163,59 +191,84 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
             ),
           ),
           const SizedBox(height: 20),
+
+          // Name
           TextField(
             controller: _nameController,
+            textCapitalization: TextCapitalization.words,
             decoration: const InputDecoration(
-              labelText: 'Name',
+              labelText: 'Full Name',
               prefixIcon: Icon(Iconsax.user),
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
+
+          // Phone
           TextField(
             controller: _phoneController,
             keyboardType: TextInputType.phone,
             decoration: const InputDecoration(
-              labelText: 'Phone',
+              labelText: 'Phone Number',
               prefixIcon: Icon(Iconsax.mobile),
             ),
           ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _cityController,
+          const SizedBox(height: 12),
+
+          // FIX 3: City dropdown
+          DropdownButtonFormField<String>(
+            value: _city,
             decoration: const InputDecoration(
               labelText: 'City',
               prefixIcon: Icon(Iconsax.location),
             ),
+            items: _kIndiaCities
+                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                .toList(),
+            onChanged: (v) => setState(() => _city = v ?? _city),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
+
+          // Platform dropdown
           DropdownButtonFormField<String>(
             value: _platform,
-            items: const [
-              'Swiggy',
-              'Zomato',
-              'Uber',
-            ].map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
-            onChanged: (v) => setState(() => _platform = v ?? _platform),
             decoration: const InputDecoration(
-              labelText: 'Platform',
+              labelText: 'Delivery Platform',
               prefixIcon: Icon(Iconsax.briefcase),
             ),
+            items: _kPlatforms
+                .map((p) => DropdownMenuItem(value: p, child: Text(p)))
+                .toList(),
+            onChanged: (v) => setState(() => _platform = v ?? _platform),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
+
+          // Consent
           CheckboxListTile(
             value: _consentGiven,
             title: const Text(
               'I consent to background telemetry for payout verification',
             ),
             onChanged: (v) => setState(() => _consentGiven = v ?? false),
+            contentPadding: EdgeInsets.zero,
           ),
           const SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: _isBusy ? null : _requestOtp,
-            child: Text(_otpRequested ? 'Resend OTP' : 'Request OTP'),
+
+          // Request OTP button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: _isBusy ? null : _requestOtp,
+              icon: const Icon(Iconsax.sms),
+              label: Text(_otpRequested ? 'Resend OTP' : 'Request OTP'),
+              style: ElevatedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+            ),
           ),
+
+          // OTP entry + verify
           if (_otpRequested) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 16),
             TextField(
               controller: _codeController,
               keyboardType: TextInputType.number,
@@ -225,11 +278,29 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            ElevatedButton(
-              onPressed: _isBusy ? null : _verifyAndSignup,
-              child: Text(_isBusy ? 'Please wait...' : 'Verify OTP & Continue'),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isBusy ? null : _verifyAndSignup,
+                icon: _isBusy
+                    ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Iconsax.shield_tick),
+                label: Text(
+                  _isBusy ? 'Please wait...' : 'Verify OTP & Continue',
+                ),
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52),
+                  backgroundColor: const Color(0xFF006D32),
+                  foregroundColor: Colors.white,
+                ),
+              ),
             ),
           ],
+          const SizedBox(height: 24),
         ],
       ),
     );

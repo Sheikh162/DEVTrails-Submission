@@ -18,8 +18,8 @@ dependencies:
   sensors_plus: ^6.1.1
   http: ^1.2.1
   flutter_secure_storage: ^9.0.0
-  another_telephony: ^0.4.1
   shared_preferences: ^2.2.2
+  sim_card_info: 1.0.0
 
 dev_dependencies:
   flutter_test:

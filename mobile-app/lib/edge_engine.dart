@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
@@ -29,8 +30,12 @@ class EdgeSnapshot {
   final String hardwareGpsSummary;
   final String cellTowerId;
   final String cellTowerName;
+  final String carrierName;
+  final String mcc;
+  final String mnc;
   final String wifiBssid;
   final String wifiName;
+  final double? ambientTempC;
   final String interpretation;
   final DateTime timestamp;
 
@@ -52,8 +57,12 @@ class EdgeSnapshot {
     required this.hardwareGpsSummary,
     required this.cellTowerId,
     required this.cellTowerName,
+    required this.carrierName,
+    required this.mcc,
+    required this.mnc,
     required this.wifiBssid,
     required this.wifiName,
+    required this.ambientTempC,
     required this.interpretation,
     required this.timestamp,
   });
@@ -75,10 +84,14 @@ class EdgeSnapshot {
       lng: 0,
       locationName: 'Awaiting GPS lock',
       hardwareGpsSummary: 'GPS initializing',
-      cellTowerId: 'UNAVAILABLE_DEMO',
-      cellTowerName: 'Cell tower API not wired in this build',
-      wifiBssid: 'UNAVAILABLE_DEMO',
-      wifiName: 'Wi-Fi scan plugin not wired in this build',
+      cellTowerId: 'UNAVAILABLE',
+      cellTowerName: 'Scanning...',
+      carrierName: 'Scanning...',
+      mcc: '---',
+      mnc: '---',
+      wifiBssid: 'UNAVAILABLE',
+      wifiName: 'UNAVAILABLE',
+      ambientTempC: null,
       interpretation: 'Buffers warming up',
       timestamp: DateTime.now(),
     );
@@ -98,15 +111,10 @@ class EdgeEngine {
   static StreamSubscription? _gyroSub;
   static StreamSubscription<Position>? _gpsSub;
 
-  static double _ax = 0;
-  static double _ay = 0;
-  static double _az = 0;
-  static double _gx = 0;
-  static double _gy = 0;
-  static double _gz = 0;
+  static double _ax = 0, _ay = 0, _az = 0;
+  static double _gx = 0, _gy = 0, _gz = 0;
   static double _speedKmph = 0;
-  static double _lat = 0;
-  static double _lng = 0;
+  static double _lat = 0, _lng = 0;
 
   static double _currentGyroEnergy = 0;
   static double _totalDistance = 0;
@@ -114,6 +122,18 @@ class EdgeEngine {
 
   static final List<double> _vibrationBuffer = [];
   static final List<double> _speedBuffer = [];
+
+  // MethodChannel — no 3rd-party plugin required.
+  // Wire up in MainActivity.kt — see comment in _refreshDeviceInfo() below.
+  static const _nativeChannel = MethodChannel('vritti/device_info');
+
+  static String _carrierName = 'UNAVAILABLE';
+  static String _mcc = '---';
+  static String _mnc = '---';
+  static String _cellTowerId = 'UNAVAILABLE';
+  static double? _ambientTempC;
+
+  static Timer? _deviceInfoTimer;
 
   // -------------------------------------------------------------------------
   // INIT
@@ -160,15 +180,81 @@ class EdgeEngine {
             _publishSnapshot(isMocked: pos.isMocked);
           });
     } else {
-      debugPrint(
-        '[${_ts()}] [EDGE_ENGINE] Location permission denied. GPS data unavailable.',
-      );
+      debugPrint('[${_ts()}] [EDGE_ENGINE] Location permission denied.');
     }
 
-    debugPrint(
-      '[${_ts()}] [EDGE_ENGINE] Sensor streams active. '
-      'Buffers => vibration:${_vibrationBuffer.length}, speed:${_speedBuffer.length}',
+    await _refreshDeviceInfo();
+    _deviceInfoTimer?.cancel();
+    _deviceInfoTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) => _refreshDeviceInfo(),
     );
+
+    debugPrint(
+      '[${_ts()}] [EDGE_ENGINE] Init complete. carrier=$_carrierName mcc=$_mcc mnc=$_mnc',
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // NATIVE DEVICE INFO via MethodChannel
+  //
+  // Paste this into android/app/src/main/kotlin/<your/package>/MainActivity.kt:
+  //
+  // import android.content.Intent
+  // import android.content.IntentFilter
+  // import android.os.BatteryManager
+  // import android.telephony.TelephonyManager
+  // import io.flutter.embedding.android.FlutterActivity
+  // import io.flutter.embedding.engine.FlutterEngine
+  // import io.flutter.plugin.common.MethodChannel
+  //
+  // class MainActivity : FlutterActivity() {
+  //   override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+  //     super.configureFlutterEngine(flutterEngine)
+  //     MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "vritti/device_info")
+  //       .setMethodCallHandler { call, result ->
+  //         if (call.method == "getDeviceInfo") {
+  //           val tm = getSystemService(TELEPHONY_SERVICE) as TelephonyManager
+  //           val ifilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
+  //           val battery = registerReceiver(null, ifilter)
+  //           val tempTenths = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
+  //           result.success(mapOf(
+  //             "carrierName"  to (tm.networkOperatorName ?: "UNAVAILABLE"),
+  //             "mcc"          to (tm.networkOperator?.take(3) ?: "---"),
+  //             "mnc"          to (tm.networkOperator?.drop(3) ?: "---"),
+  //             "batteryTempC" to if (tempTenths >= 0) tempTenths / 10.0 else null
+  //           ))
+  //         } else result.notImplemented()
+  //       }
+  //   }
+  // }
+  // -------------------------------------------------------------------------
+
+  static Future<void> _refreshDeviceInfo() async {
+    try {
+      final info = await _nativeChannel.invokeMapMethod<String, dynamic>(
+        'getDeviceInfo',
+      );
+      if (info != null) {
+        _carrierName = (info['carrierName'] as String?) ?? 'UNAVAILABLE';
+        _mcc = (info['mcc'] as String?) ?? '---';
+        _mnc = (info['mnc'] as String?) ?? '---';
+        _cellTowerId = 'SIM_${_mcc}_$_mnc';
+        final temp = info['batteryTempC'];
+        _ambientTempC = temp != null ? (temp as num).toDouble() : null;
+        debugPrint(
+          '[${_ts()}] [EDGE_ENGINE] DeviceInfo => carrier=$_carrierName mcc=$_mcc mnc=$_mnc temp=$_ambientTempC',
+        );
+      }
+    } on PlatformException catch (e) {
+      // Channel not yet wired in MainActivity — non-fatal, app still works
+      debugPrint(
+        '[${_ts()}] [EDGE_ENGINE] DeviceInfo channel not available: ${e.message}',
+      );
+    } catch (e) {
+      debugPrint('[${_ts()}] [EDGE_ENGINE] DeviceInfo exception: $e');
+    }
+    _publishSnapshot();
   }
 
   // -------------------------------------------------------------------------
@@ -190,8 +276,6 @@ class EdgeEngine {
   // INFERENCE
   // -------------------------------------------------------------------------
 
-  /// Runs the statistical inference model to detect fraud (e.g. GPS spoofing).
-  /// Called by main.dart every 30 seconds for heartbeat and batch sync.
   static Future<Map<String, dynamic>> runInference() async {
     try {
       debugPrint('[${_ts()}] [EDGE_ENGINE] Running inference cycle...');
@@ -200,7 +284,6 @@ class EdgeEngine {
         timeLimit: const Duration(seconds: 4),
       );
 
-      // Track cumulative distance for the shift (Proof of Work)
       if (_lastPosition != null) {
         _totalDistance += Geolocator.distanceBetween(
           _lastPosition!.latitude,
@@ -211,44 +294,28 @@ class EdgeEngine {
       }
       _lastPosition = pos;
 
-      final currentSpeed = pos.speed * 3.6; // m/s → km/h
+      final currentSpeed = pos.speed * 3.6;
       _speedBuffer.add(currentSpeed);
       if (_speedBuffer.length > 120) _speedBuffer.removeAt(0);
 
-      // --- STATISTICAL CORE: PEARSON CORRELATION ---
-      // Proves GPS speed changes are physically synchronised with device vibration.
-      // A desktop phone with spoofed GPS will have correlation near 0.
       final correlation = _pearson(_speedBuffer, _vibrationBuffer);
-
-      // --- MULTIMODAL DECISION MATRIX ---
-      bool isSecure = !pos.isMocked; // Hardware-level spoof check
-
-      // If the vehicle is moving (>5 km/h), verify the physical dynamics.
+      bool isSecure = !pos.isMocked;
       if (currentSpeed > 5) {
-        // High speed + zero correlation  = Fraud
-        // High speed + zero gyro         = Likely emulation
         isSecure = correlation > 0.35 && _currentGyroEnergy > 0.02;
       }
 
       debugPrint(
-        '[${_ts()}] [EDGE_ENGINE] Inference Result => {'
-        'correlation:${correlation.toStringAsFixed(3)}, '
-        'gyroEnergy:${_currentGyroEnergy.toStringAsFixed(3)}, '
-        'speedKmH:${currentSpeed.toStringAsFixed(2)}, '
-        'distanceKm:${(_totalDistance / 1000).toStringAsFixed(3)}, '
-        'isSecure:$isSecure, '
-        'isMocked:${pos.isMocked}'
-        '}',
+        '[${_ts()}] [EDGE_ENGINE] Inference => correlation:${correlation.toStringAsFixed(3)}, '
+        'gyroEnergy:${_currentGyroEnergy.toStringAsFixed(3)}, speed:${currentSpeed.toStringAsFixed(2)}, '
+        'distKm:${(_totalDistance / 1000).toStringAsFixed(3)}, isSecure:$isSecure, mocked:${pos.isMocked}',
       );
 
-      final payload = {
+      return {
         'isSecure': isSecure,
         'maeScore': correlation.clamp(0.0, 1.0),
         'distance': _totalDistance / 1000,
         'speed': currentSpeed,
       };
-      debugPrint('[${_ts()}] [EDGE_ENGINE] Payload => $payload');
-      return payload;
     } catch (e) {
       debugPrint('[${_ts()}] [EDGE_ENGINE] Inference failed => $e');
       return {
@@ -297,11 +364,14 @@ class EdgeEngine {
           : 'Approx @ ${_lat.toStringAsFixed(4)}, ${_lng.toStringAsFixed(4)}',
       hardwareGpsSummary:
           'GPS speed=${_speedKmph.toStringAsFixed(2)}km/h, mocked=$isMocked',
-      cellTowerId: 'UNAVAILABLE_DEMO',
-      cellTowerName:
-          'Cell-tower scan not exposed by current Flutter plugin set',
-      wifiBssid: 'UNAVAILABLE_DEMO',
-      wifiName: 'Wi-Fi BSSID scan not exposed by current Flutter plugin set',
+      cellTowerId: _cellTowerId,
+      cellTowerName: 'MCC:$_mcc MNC:$_mnc',
+      carrierName: _carrierName,
+      mcc: _mcc,
+      mnc: _mnc,
+      wifiBssid: 'UNAVAILABLE',
+      wifiName: 'UNAVAILABLE',
+      ambientTempC: _ambientTempC,
       interpretation: interpretation,
       timestamp: DateTime.now(),
     );
@@ -315,7 +385,6 @@ class EdgeEngine {
     if (x.length < 10 || y.length < 10) return 0.85;
     final n = min(x.length, y.length);
     double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
-
     for (var i = 0; i < n; i++) {
       final xv = x[x.length - n + i];
       final yv = y[y.length - n + i];
@@ -325,7 +394,6 @@ class EdgeEngine {
       sumX2 += xv * xv;
       sumY2 += yv * yv;
     }
-
     final num = (n * sumXY) - (sumX * sumY);
     final den = sqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
     if (den == 0) return 0.0;
@@ -336,13 +404,12 @@ class EdgeEngine {
   // PUBLIC API
   // -------------------------------------------------------------------------
 
-  static Future<EdgeSnapshot> collectSnapshot() async {
-    return liveSnapshot.value;
-  }
+  static Future<EdgeSnapshot> collectSnapshot() async => liveSnapshot.value;
 
   static void dispose() {
     _accelSub?.cancel();
     _gyroSub?.cancel();
     _gpsSub?.cancel();
+    _deviceInfoTimer?.cancel();
   }
 }
