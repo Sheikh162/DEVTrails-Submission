@@ -13,13 +13,15 @@ dependencies:
   geolocator: ^13.0.1
   google_fonts: ^6.2.1
   animate_do: ^4.2.0
-  iconsax_flutter: ^1.0.1 # Fixed version
+  iconsax_flutter: ^1.0.1
   percent_indicator: ^4.2.5
   sensors_plus: ^6.1.1
   http: ^1.2.1
   flutter_secure_storage: ^9.0.0
   shared_preferences: ^2.2.2
   sim_card_info: 1.0.0
+  # NEW: Native Push Notifications
+  flutter_local_notifications: ^17.1.2
 
 dev_dependencies:
   flutter_test:

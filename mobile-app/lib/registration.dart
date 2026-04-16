@@ -16,7 +16,6 @@ dynamic _regTryDecodeJson(String body) {
   }
 }
 
-// FIX 3: comprehensive list of Indian cities for the dropdown
 const List<String> _kIndiaCities = [
   'Ahmedabad',
   'Bengaluru',
@@ -38,6 +37,10 @@ const List<String> _kIndiaCities = [
   'Pune',
   'Surat',
   'Visakhapatnam',
+  // --- GUARANTEED DISRUPTION ZONES FOR DEMO ---
+  'Kyiv',
+  'Beirut',
+  'Gaza',
 ];
 
 const List<String> _kPlatforms = [
@@ -61,16 +64,16 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
   final _phoneController = TextEditingController();
   final _codeController = TextEditingController();
 
-  // FIX 3: city is now a dropdown selection, not a free-text field
   String _city = 'Chennai';
   String _platform = 'Swiggy';
   bool _consentGiven = false;
   bool _otpRequested = false;
   bool _isBusy = false;
 
+  // CHANGE THIS TO http://192.168.x.x:8000 FOR LOCAL TESTING
   static const _base = 'https://vritti-ps1s.onrender.com';
 
-  void _log(String msg) => debugPrint('[${_regTs()}] [REGISTRATION] $msg');
+  void _log(String msg) => debugPrint('[$_regTs()] [REGISTRATION] $msg');
 
   Future<void> _requestOtp() async {
     final phone = _phoneController.text.trim();
@@ -150,7 +153,6 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('user_id', userId.toString());
         await prefs.setString('user_name', userName.toString());
-        // FIX 3: persist city and platform so dashboard can read them
         await prefs.setString('user_city', _city);
         await prefs.setString('user_platform', _platform);
 
@@ -214,7 +216,7 @@ class _RegistrationScreenState extends State<RegistrationScreen> {
           ),
           const SizedBox(height: 12),
 
-          // FIX 3: City dropdown
+          // City dropdown
           DropdownButtonFormField<String>(
             value: _city,
             decoration: const InputDecoration(
