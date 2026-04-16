@@ -64,7 +64,7 @@ export class DisruptionService {
       let newsDetail = "No news of disruption";
       try {
         const newsRes = await axios.post(
-          "http://localhost:8000/api/v1/analyze/location",
+          "https://devtrails-submission-api.onrender.com",
           { latitude: lat, longitude: lng, radius_km: 50 },
         );
 
