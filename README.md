@@ -2,6 +2,52 @@
 
 **Tagline:** Protecting the pockets of the people who feed our cities.
 
+## Pitch Deck
+
+Pitch deck link: `<ADD_PUBLIC_PITCH_DECK_LINK_HERE>`
+
+## Recorded Video
+
+Demo video link: `<ADD_PUBLIC_DEMO_VIDEO_LINK_HERE>`
+
+## Source Code
+
+- GitHub repository: <https://github.com/AKA-Slim-Shady/DEVTrails-Submission>
+- Backend API docs and local setup: [backend/README.md](./backend/README.md)
+- Flutter app docs and local setup: [mobile-app/README.md](./mobile-app/README.md)
+- ML pricing engine docs and local setup: [Edge_Model/README.md](./Edge_Model/README.md)
+- News disruption scanner docs and local setup: [News-Scraper/README.md](./News-Scraper/README.md)
+
+### Quick Local Run
+
+Run each component from its own folder after configuring the required `.env` values described in the linked READMEs:
+
+```bash
+cd backend
+npm install
+npx prisma generate
+npm run dev
+```
+
+```bash
+cd Edge_Model
+pip install fastapi uvicorn joblib pandas numpy scikit-learn xgboost shap matplotlib
+python train.py
+python fast_APP.py
+```
+
+```bash
+cd News-Scraper
+pip install -r requirements.txt
+python main.py
+```
+
+```bash
+cd mobile-app
+flutter pub get
+flutter run
+```
+
 ## 1. What is Vritti?
 
 Vritti is a weekly income-protection plan built specifically for food delivery riders (Swiggy, Zomato, Uber Eats). While most insurance covers hospital bills or bike crashes, Vritti is different: it protects a rider's **daily earnings** when things outside their control, like severe floods, extreme heatwaves, or unexpected city strikes, stop them from working.
@@ -91,6 +137,15 @@ Not all disruptions are weather-related. What if there is a sudden transport str
 - **The Backend:** Node.js and PostgreSQL (User data and wallets).
 - **The AI Brain (News Pipeline):** Python, Llama-3 (Reasoning), and Neo4j (Graph Database for tracking events).
 - **Connections:** Razorpay/NPCI (Instant UPI transfers) and Account Aggregator (Secure income verification).
+
+---
+
+## Repository Map
+
+- [backend](./backend/README.md): Node.js/TypeScript API, Prisma schema, scheduled renewal/disruption jobs, payout orchestration, and ML pricing integration.
+- [mobile-app](./mobile-app/README.md): Flutter rider app with OTP onboarding, dashboard flows, notifications, and on-device edge telemetry.
+- [Edge_Model](./Edge_Model/README.md): Python ML pricing engine that trains/serves weekly risk and premium predictions.
+- [News-Scraper](./News-Scraper/README.md): FastAPI/Gemini civic-disruption scanner that reads local news and returns structured event analysis.
 
 ---
 

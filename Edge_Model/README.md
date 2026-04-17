@@ -1,290 +1,108 @@
-# Edge Model README
+# Vritti ML Pricing Engine
 
-## Introduction
+Python model and FastAPI service for Vritti's dynamic weekly premium calculation. This component turns rider profile, zone infrastructure, weather forecast, and civic disruption signals into a risk multiplier, disruption probability, alert multiplier, and final INR premium.
 
-This folder contains the edge-side pricing and prediction assets for the Safety SIP prototype. The goal of the dynamic pricing model is to estimate how risky a given rider's upcoming week is and then convert that estimated risk into a premium recommendation that still stays fair during disruption-heavy periods.
+## Model Flow
 
-At a high level, the pricing logic works like this:
+1. `generate_data.py` creates synthetic rider-week training data for the prototype.
+2. `train.py` engineers features, applies imputation defaults, trains risk and disruption models, and writes model artifacts under `models/`.
+3. `fast_APP.py` loads those artifacts and exposes prediction endpoints consumed by the Node backend.
 
-1. A rider profile is combined with zone, weather, and civic-disruption context.
-2. The model estimates a weekly risk multiplier called `w_risk`.
-3. The model also estimates the probability that the rider will face an income-loss disruption.
-4. Business rules such as IMD alert levels, heat overrides, and loyalty discounts are applied.
-5. A final premium is returned through the API.
+The checked-in CSV files make the training assumptions visible and reproducible. The trained `models/` directory is expected at runtime but may be generated locally rather than committed.
 
-This setup is "dynamic" because the premium is not fixed. It changes based on the rider's operating environment, predicted disruption risk, and alert conditions.
+## Inputs
 
-## Dynamic Pricing Logic
+The engine combines:
 
-The model uses a mix of rider features, environmental signals, and rule-based adjustments.
+- Rider profile: platform, tier, shift, active hours, delivery radius, loyalty, earnings, volatility, claim history.
+- Zone infrastructure: elevation, waterlogging history, road quality, heat-island index.
+- Weather forecast: 7-day rain, max temperature, wind gusts, AQI, IMD alert level.
+- Civic signals: bandh probability, platform outages, festival flag, political event flag.
 
-Important inputs include:
+## Outputs
 
-- Rider workload: delivery radius, active hours, loyalty, earnings volatility, claim history
-- Zone risk: elevation, road quality, waterlogging history, heat-island intensity
-- Weather: rain, temperature, wind gusts, AQI, IMD alert level
-- Civic factors: bandh probability, platform outages, festival flag, political flag
+- `w_risk`: weekly risk multiplier.
+- `disruption_prob`: probability of income-loss disruption.
+- `disruption_flag`: boolean risk decision.
+- `r_alert`: rule-based IMD/heat alert multiplier.
+- `loyalty_discount`: discount derived from active tenure.
+- `premium_final_inr`: final weekly premium.
+- `top_risk_factors`: concise explanation data for demos/debugging.
 
-Important outputs include:
+## Setup
 
-- `w_risk`: a continuous multiplier that represents how risky the upcoming week is
-- `disruption_prob`: the probability that a rider experiences a disruption event
-- `r_alert`: a rule-based multiplier derived from IMD and heat conditions
-- `premium_final_inr`: the final premium after applying model output and business rules
+Install the Python dependencies used by training and serving:
 
-The premium is meant to reflect real operational conditions:
+```bash
+pip install fastapi uvicorn joblib pandas numpy scikit-learn xgboost shap matplotlib
+```
 
-- High rain plus low elevation plus bad waterlogging history should increase risk
-- High heat during exposed shifts should increase risk
-- Severe IMD alerts should reduce or fully waive the premium through `r_alert`
-- Higher loyalty should reduce the amount charged
+Generate synthetic data if needed:
 
-## Files Included In The Minimal PR
+```bash
+python generate_data.py
+```
 
-### [../.gitignore](../.gitignore)
+Train models:
 
-This file keeps local-only files out of version control.
+```bash
+python train.py
+```
 
-Its job is to prevent accidental commits of:
+Start the API:
 
-- installed packages such as `.python_packages/` and `.web_packages/`
-- cache folders such as `__pycache__/`
-- large generated artifacts that do not belong in the main code review
-
-This matters because the actual model logic is your code, while package folders are just downloaded dependencies and can make a PR unnecessarily huge.
-
-### [generate_data.py](./generate_data.py)
-
-This script creates the synthetic training dataset used by the pricing model.
-
-What it does:
-
-1. Defines the Chennai zone assumptions used in the prototype.
-2. Simulates rider attributes such as platform, shift, loyalty, earnings, and exposure.
-3. Simulates environmental conditions such as rain, temperature, wind, AQI, and IMD alerts.
-4. Simulates civic-disruption signals such as bandh probability and platform outages.
-5. Computes the target labels:
-   - `w_risk`
-   - `disruption_label`
-6. Writes the generated data into CSV files.
-
-Why it is important:
-
-- It captures the domain assumptions behind the model.
-- It creates the dataset that the rest of the pipeline learns from.
-- It makes the prototype reproducible without needing real production data.
-
-### [training_data.csv](./training_data.csv)
-
-This is the main synthetic dataset generated by `generate_data.py`.
-
-It contains the raw rider-week records used for training and validation. Each row represents one rider for one week, along with:
-
-- rider profile data
-- zone and infrastructure data
-- weather forecasts
-- civic-disruption signals
-- pricing-related target columns
-
-Why it is important:
-
-- It is the core tabular dataset behind the model.
-- It shows exactly what features and labels are available.
-- It acts as the source of truth for the prototype training flow.
-
-### [training_data_encoded.csv](./training_data_encoded.csv)
-
-This is an encoded version of the training dataset.
-
-What is different from `training_data.csv`:
-
-- text categorical columns are also represented in encoded numeric form
-- examples include zone, delivery platform, tier, and shift
-
-Why it is important:
-
-- It is convenient for inspection and debugging
-- it is easier to feed into model-training workflows that expect numeric inputs
-- it makes the preprocessing step more visible to reviewers
-
-### [fast_APP.py](./fast_APP.py)
-
-This is the FastAPI service that exposes the trained pricing logic through HTTP endpoints.
-
-Its responsibilities are:
-
-1. Load the saved model artifacts and supporting metadata.
-2. Rebuild the prediction function used during inference.
-3. Define request and response schemas.
-4. Expose API endpoints for single predictions, batch predictions, health checks, and alert lookup.
-5. Start a local web server with Uvicorn.
-
-This file is the bridge between the model and the rest of the system. It is what allows a frontend, Node backend, or any API client to request pricing predictions.
-
-## FastAPI Endpoints
-
-### `POST /predict`
-
-Purpose:
-
-- Predict the weekly rider risk and premium for one rider.
-
-Input:
-
-- one JSON object matching the `RiderFeatures` schema
-
-Output:
-
-- `rider_id`
-- `w_risk`
-- `disruption_prob`
-- `disruption_flag`
-- `r_alert`
-- `alert_source`
-- `loyalty_discount`
-- `premium_final_inr`
-- `confidence`
-- `top_risk_factors`
-- `computed_at`
-
-What happens internally:
-
-1. The API validates the incoming rider payload.
-2. Missing fields are handled through the default-value logic from the training pipeline.
-3. Features are engineered and encoded.
-4. The regression model predicts `w_risk`.
-5. The classification model predicts disruption probability.
-6. Rule-based overrides adjust the alert multiplier and premium.
-7. A structured response is returned.
-
-### `POST /predict/batch`
-
-Purpose:
-
-- Predict for multiple riders in one request.
-
-Input:
-
-- a JSON body with a `riders` list
-
-Output:
-
-- `processed`
-- `results`
-- `batch_at`
-
-What happens internally:
-
-1. The endpoint loops through each rider.
-2. It calls the same prediction logic used by `/predict`.
-3. If one rider fails, a fallback result is returned for that rider instead of failing the whole batch.
-
-This endpoint is useful for scheduled pricing jobs or bulk evaluation.
-
-### `GET /health`
-
-Purpose:
-
-- Confirm that the API is running and that model metadata is available.
-
-Output includes:
-
-- status
-- model trained timestamp
-- number of training rows
-- drift threshold
-- baseline `w_risk`
-- readiness flag
-
-This is the first endpoint to check when debugging deployment issues.
-
-### `GET /r_alert/{zone_id}`
-
-Purpose:
-
-- Return the current alert-based multiplier without running the full ML model.
-
-Query parameters:
-
-- `imd_level`
-- `max_temp`
-
-Path parameter:
-
-- `zone_id`
-
-Output includes:
-
-- zone id
-- IMD level
-- max temperature
-- `r_alert`
-- alert source
-- discount percentage
-- timestamp
-
-Business logic:
-
-- IMD alert levels map to fixed multipliers
-- extreme heat can trigger an NDMA-style override even when IMD level is low
-
-This endpoint is useful when the surrounding system only needs the rule-based alert discount.
-
-## Request Schema Summary
-
-The main request model is `RiderFeatures`.
-
-It includes:
-
-- rider identity
-- zone
-- platform
-- tier
-- shift
-- activity and earnings features
-- zone infrastructure features
-- forecast inputs
-- civic-disruption features
-
-This schema ensures that all requests entering the API are validated before inference runs.
-
-## Typical Flow
-
-A normal workflow for this folder is:
-
-1. Generate synthetic data with `generate_data.py`
-2. Review or inspect the dataset in `training_data.csv`
-3. Use the encoded version when numeric inspection is needed
-4. Start the API with `fast_APP.py`
-5. Call `/predict` or `/predict/batch` to retrieve dynamic pricing outputs
-
-## Example Usage
-
-Run the API locally from the `Edge_Model` directory:
-
-```powershell
+```bash
 python fast_APP.py
 ```
 
-Test the health endpoint:
+The service listens on `http://0.0.0.0:8000` by default. Configure the backend with:
 
-```text
-http://127.0.0.1:8000/health
+```env
+PRICING_ENGINE_URL=http://localhost:8000
 ```
 
-Open the interactive FastAPI docs:
+## API
 
-```text
-http://127.0.0.1:8000/docs
+- `GET /health` returns model readiness and drift baseline metadata.
+- `GET /r_alert/{zone_id}?imd_level=0&max_temp=30` returns the alert multiplier without running full prediction.
+- `POST /predict` predicts premium and risk for one rider.
+- `POST /predict/batch` predicts for multiple riders and returns per-rider fallback results when individual records fail.
+
+Example single prediction shape:
+
+```json
+{
+  "rider_id": "demo-rider-1",
+  "home_zone_id": "chennai_central",
+  "delivery_platform": "swiggy",
+  "tier": "silver",
+  "primary_shift": "evening",
+  "avg_delivery_radius_km": 8,
+  "avg_daily_active_hours": 8,
+  "loyalty_weeks_active": 4,
+  "avg_weekly_earnings_4wk": 6500,
+  "earnings_volatility_index": 0.3,
+  "claim_history_score": 0.1,
+  "zone_elevation_index": 5,
+  "waterlogging_incidents_3yr": 5,
+  "road_quality_score": 5,
+  "zone_heat_island_index": 1.5,
+  "rain_mm_7day_forecast": 20,
+  "max_temp_forecast": 34,
+  "wind_gust_kmh_forecast": 20,
+  "aqi_forecast_avg": 120,
+  "imd_alert_level_forecast": 0,
+  "bandh_probability_score": 0.05,
+  "platform_outage_7d_count": 1,
+  "festival_calendar_flag": 0,
+  "political_event_flag": 0
+}
 ```
 
-## Why This Folder Matters
+## Files
 
-This folder shows the full idea behind the prototype:
-
-- synthetic risk-aware training data
-- dynamic pricing inputs
-- explainable structured outputs
-- an API interface that can be connected to other services
-
-In short, it demonstrates how rider context, local disruption signals, and business rules can be combined into a deployable pricing engine.
+- `generate_data.py` creates synthetic training datasets.
+- `training_data.csv` is the raw synthetic training dataset.
+- `training_data_encoded.csv` is the encoded inspection/training variant.
+- `train.py` contains feature engineering, model training, artifact writing, and prediction function construction.
+- `fast_APP.py` is the FastAPI model server.

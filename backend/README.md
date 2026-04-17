@@ -1,114 +1,116 @@
 # Vritti Core Backend
 
-## Overview
+Node.js/TypeScript API for Vritti's parametric income-protection platform. This service owns rider onboarding, wallet and policy records, telemetry ingestion, disruption evaluation, premium renewal, payout history, and integration with the Python ML pricing engine.
 
-Vritti is a parametric income-protection platform built for gig workers. It operates as an automated micro-insurance system that replaces lost daily earnings when verifiable civic or environmental disruptions (e.g., severe cyclones, extreme flooding, transport strikes) halt city operations.
+## Responsibilities
 
-The core philosophy of the system is: the disruption is verifiable, the loss is calculable, and the payout is automatic.
-
-This repository houses the central Node.js backend. It acts as the orchestration layer, connecting the mobile client's edge telemetry, the machine learning pricing engine, and the automated news/weather scrapers to execute payouts autonomously.
-
-## System Architecture
-
-The backend serves as the nervous system connecting four primary components:
-
-1. **Core API (This Repository):** Manages user authentication, wallet balances, active policies, telemetry ingestion, and triggers the automated claim evaluation pipeline.
-    
-2. **Pricing Engine:** A Python-based ML service that calculates dynamic weekly premiums based on predictive weather, civic risk, and rider history.
-    
-3. **Event Scraper:** A Python/Gemini-powered pipeline that continuously monitors RSS feeds and weather APIs (Open-Meteo) to declare city-wide disruptions.
-    
-4. **Edge Trust Layer:** A Flutter mobile application that runs physics-based GPS/Accelerometer correlation to detect location spoofing locally, sending only encrypted "heartbeats" to this backend.
-    
+- Authenticate riders with OTP-style login and create their initial wallet/policy records.
+- Store rider profiles, policies, heartbeats, disruption checks, events, payouts, and notifications in PostgreSQL through Prisma.
+- Accept edge telemetry from the Flutter app and persist the fraud status used during one-touch claim evaluation.
+- Evaluate city disruptions by combining weather/news/activity signals and trigger eligible payouts.
+- Call the pricing engine for personalized weekly premium quotes and batch renewal pricing.
+- Run scheduled jobs for external data ingestion, R-alert refresh, daily disruption checks, and Saturday policy renewals.
 
 ## Tech Stack
 
-- **Runtime:** Node.js (v22+)
-    
-- **Language:** TypeScript
-    
-- **Framework:** Express.js
-    
-- **Database:** PostgreSQL
-    
-- **ORM:** Prisma Client (v7.6.0)
-    
-- **HTTP Client:** Axios
-    
+- Runtime: Node.js with TypeScript ES modules
+- API: Express 5
+- Database: PostgreSQL
+- ORM: Prisma 7
+- Scheduling: node-cron
+- External calls: Axios
 
-## Getting Started
+## Setup
 
-### Prerequisites
+Install dependencies:
 
-- Node.js installed on your local machine.
-    
-- A running instance of PostgreSQL.
-    
-- Access to the external Python ML Engine and Scraper services (or mock endpoints for local testing).
-    
+```bash
+npm install
+```
 
-### Environment Configuration
+Create `backend/.env` or a root `.env` file with at least:
 
-Create a `.env` file in the root directory and populate it with the required configuration:
+```env
+DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE
+PORT=3000
+PRICING_ENGINE_URL=http://localhost:8000
+NODE_ENV=development
+```
 
-### Installation
+Generate Prisma client and sync the schema as needed:
 
-1. Clone the repository:
-    
-2. Install dependencies:
-    
-3. Synchronize the database schema and generate the Prisma client:
-    
-4. (Optional) Seed the database with initial demo data:
-    
+```bash
+npx prisma generate
+npx prisma db push
+```
 
-### Running the Application
+Seed demo data:
 
-To run the application in development mode with hot-reloading:
+```bash
+npx prisma db seed
+```
 
-To build and run for production:
+Run locally:
+
+```bash
+npm run dev
+```
+
+Build and run production output:
+
+```bash
+npm run build
+npm start
+```
+
+## Main Endpoints
+
+- `GET /health` returns backend health.
+- `POST /api/v1/auth/request-otp` starts login/signup.
+- `POST /api/v1/auth/verify-otp` verifies OTP and provisions user state.
+- `GET /api/v1/auth/profile/:userId` returns rider profile data.
+- `POST /api/v1/user/location` syncs rider location.
+- `POST /api/v1/telemetry/heartbeat` stores edge fraud telemetry.
+- `GET /api/v1/user/heartbeat/:userId` returns latest heartbeat status.
+- `GET /api/v1/user/dashboard/:userId` powers the mobile dashboard.
+- `POST /api/v1/intelligence/evaluate` evaluates disruption status for a city.
+- `GET /api/v1/intelligence/history/:city` returns past disruption checks.
+- `GET /api/v1/intelligence/status/:city` returns current city disruption state.
+- `POST /api/v1/claims/one-touch` evaluates and triggers a parametric claim.
+- `POST /api/v1/premium/renew` runs weekly premium renewal.
+- `GET /api/v1/premium/policies/:userId` returns policy history.
+- `GET /api/v1/premium/estimate?city=&userId=` returns a premium estimate.
+- `GET /api/v1/pricing/health` checks the ML pricing engine.
+- `GET /api/v1/pricing/r-alert/:city` proxies R-alert multiplier lookup.
+- `GET /api/v1/pricing/quote/:userId` returns a personalized ML premium quote.
+- `POST /api/v1/pricing/predict` passes raw prediction payloads to the ML engine.
+- `GET /api/v1/payouts/:userId` returns payout history.
+
+Demo endpoints live under `/api/demo/*` for hackathon flows such as forced disruption checks, forced renewals, seeded heartbeat state, and pricing quote breakdowns.
+
+## Scheduled Jobs
+
+- Every 4 hours: ingest external weather and news data for Chennai.
+- Every 6 hours: refresh R-alert multiplier from the pricing engine.
+- Daily at 14:00: run afternoon disruption evaluation.
+- Daily at 20:00: run evening disruption evaluation.
+- Saturday at 23:55: process weekly premium renewals with ML batch pricing.
 
 ## Project Structure
 
-The source code is modularized by domain within the `src/modules` directory:
+```text
+backend/
+|-- prisma/
+|   `-- schema.prisma
+|-- src/
+|   |-- config/
+|   |-- modules/
+|   |-- main.ts
+|   |-- routes.ts
+|   `-- seed.ts
+|-- package.json
+|-- prisma.config.ts
+`-- tsconfig.json
+```
 
-## Key API Domains
-
-### Authentication
-
-- `POST /api/v1/auth/request-otp` - Initiates the login sequence.
-    
-- `POST /api/v1/auth/verify-otp` - Completes login and provisions a new user wallet/policy.
-    
-
-### Telemetry & Anti-Fraud
-
-- `POST /api/v1/telemetry/heartbeat` - Receives 10-second interval sensor data from the mobile app. Flags anomalies to prevent location spoofing.
-    
-
-### Parametric Claims
-
-- `POST /api/v1/claims/one-touch` - Evaluates a user for a payout. This endpoint cross-references the user's active policy, the live weather API (Open-Meteo), the News Scraper, and the local Edge Fraud status before executing a wallet transfer.
-    
-
-### Machine Learning Pricing
-
-- `GET /api/v1/pricing/quote/:userId` - Fetches a dynamic premium quote by compiling user history and passing it to the external ML model.
-    
-- `POST /api/v1/premium/renew` - Batch processes all active users for their weekly policy renewal.
-    
-
-## Automated Schedules
-
-The backend operates several time-based routines (typically configured via cron or external schedulers):
-
-- **Afternoon/Evening Disruption Checks:** Automatically evaluates city-wide metrics to determine if a mass payout event should be triggered.
-    
-- **Weekly Policy Renewals:** Runs every Saturday night to calculate the upcoming week's dynamic premium, deduct it from user wallets, and generate new active policies.
-    
-
-## Security & Anti-Fraud
-
-To protect the system from mass GPS spoofing attacks, Vritti does not rely solely on server-side location tracking. The mobile application computes a Pearson correlation between physical device vibration (accelerometer) and GPS speed.
-
-The backend records the resulting `isDeviceSecure` status during the heartbeat sync. If a user attempts to file a claim while their device telemetry is flagged as fraudulent or static, the `/one-touch` claim endpoint will automatically reject the transaction, citing inconsistent edge telemetry.
+See [src/README.md](./src/README.md) for module responsibilities and [prisma/README.md](./prisma/README.md) for the database model map.
